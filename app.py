@@ -32,6 +32,23 @@ from model import (
 
 
 # ============================================================
+# SECTION: UI LANGUAGE HELPERS
+# ============================================================
+
+LANGUAGE_EN = "🇬🇧 English"
+LANGUAGE_CN = "🇨🇳 中文"
+
+
+def is_cn():
+    return st.session_state.get("ui_language", LANGUAGE_EN) == LANGUAGE_CN
+
+
+def t(en, zh):
+    return zh if is_cn() else en
+
+
+
+# ============================================================
 # SECTION: FILE EXPORT HELPERS
 # ============================================================
 
@@ -489,7 +506,7 @@ def build_pension_tax_free_summary_df(det_df):
 def render_assumption_details(df):
     display_df = format_assumption_display_df(df)
 
-    st.subheader("Assumption Details")
+    st.subheader(t("Assumption Details", "假设明细"))
     st.dataframe(
         display_df,
         use_container_width=True,
@@ -534,7 +551,7 @@ def render_assumption_details(df):
 
 
 def render_warning_sections(input_warnings_by_scenario, output_warnings_by_scenario, view_mode):
-    if view_mode == "Adviser View":
+    if view_mode == t("Adviser View", "顾问视图"):
         for scenario_name, warnings_list in input_warnings_by_scenario.items():
             if warnings_list:
                 st.subheader(f"Input Warnings - {scenario_name}")
@@ -556,7 +573,7 @@ def render_warning_sections(input_warnings_by_scenario, output_warnings_by_scena
             client_messages.extend(warnings_list)
 
         if client_messages:
-            st.subheader("Important Notes")
+            st.subheader(t("Important Notes", "重要提示"))
             for message in client_messages[:5]:
                 st.warning(message)
 
@@ -650,9 +667,10 @@ def build_adviser_debug_df(det_df):
 # SECTION: PAGE SETUP
 # ============================================================
 
-st.set_page_config(page_title="Financial Modelling Tool", layout="wide")
-st.title("Financial Modelling Tool")
-st.caption("Retirement projection, Monte Carlo simulation, scenario comparison, and client/adviser views")
+st.set_page_config(page_title="Retirement Modelling Suite (AU)", page_icon="📊", layout="wide")
+
+if "ui_language" not in st.session_state:
+    st.session_state.ui_language = LANGUAGE_EN
 
 
 # ============================================================
@@ -707,8 +725,9 @@ defaults = {
     "non_super_capital_return_mean": 0.030,
     "non_super_capital_return_std": 0.080,
     "inflation_rate": 0.030,
-    "number_of_simulations": 5000,
+    "number_of_simulations": 1000,
     "random_seed": 42,
+    "ui_language": LANGUAGE_EN,
     "preset_table_df": get_default_preset_table_df(),
     "contribution_events_df": get_default_contribution_events_df(),
 }
@@ -807,27 +826,59 @@ contribution_events_df = st.session_state.contribution_events_df.copy()
 # SECTION: SIDEBAR CONTROLS
 # ============================================================
 
+
 with st.sidebar:
-    st.header("Controls")
+    st.markdown(f"### {t('Controls', '控制面板')}")
+    selected_language = st.radio(
+        t("Language", "语言"),
+        options=[LANGUAGE_EN, LANGUAGE_CN],
+        index=0 if st.session_state.ui_language == LANGUAGE_EN else 1,
+        key="ui_language_selector",
+    )
+    st.session_state.ui_language = selected_language
 
     view_mode = st.radio(
-        "View Mode",
-        options=["Adviser View", "Client View"],
+        t("View Mode", "视图模式"),
+        options=[t("Adviser View", "顾问视图"), t("Client View", "客户视图")],
     )
 
     scenario_mode = st.radio(
-        "Scenario Mode",
-        options=["Single Scenario", "Compare Standard Presets"],
+        t("Scenario Mode", "情景模式"),
+        options=[t("Single Scenario", "单一情景"), t("Compare Standard Presets", "比较标准预设")],
     )
 
     preset_choice = st.selectbox(
-        "Assumption Preset",
+        t("Assumption Preset", "假设预设"),
         options=["Conservative", "Base Case", "Optimistic", "Custom"],
         key="assumption_preset",
-        disabled=(scenario_mode == "Compare Standard Presets"),
+        disabled=(scenario_mode == t("Compare Standard Presets", "比较标准预设")),
     )
 
-    run_button = st.button("Run Simulation", type="primary", use_container_width=True)
+    run_button = st.button(t("Run Simulation", "运行模拟"), type="primary", use_container_width=True)
+
+st.title(t("Retirement Modelling Suite (Australia)", "退休建模工具（澳大利亚）"))
+st.subheader(t("Superannuation • Tax • CGT • Retirement Cashflow Modelling", "养老金 • 税务 • 资本利得税 • 退休现金流建模"))
+st.caption(
+    t(
+        "A professional financial modelling tool for analysing retirement outcomes, superannuation strategies, and tax impacts under Australian rules.",
+        "一个用于分析澳大利亚退休结果、养老金策略与税务影响的专业金融建模工具。"
+    )
+)
+st.warning(
+    t(
+        "This tool is for modelling and educational purposes only. It does not constitute personal financial advice. Results are based on assumptions and may not reflect actual outcomes.",
+        "本工具仅用于建模和学习展示，不构成个人财务建议。结果基于假设，未必反映实际结果。"
+    )
+)
+with st.container(border=True):
+    st.markdown(
+        t(
+            """### Overview
+Use this tool to model retirement sustainability, super accumulation to pension transitions, Transfer Balance Cap constraints, and tax impacts under multiple scenarios.""",
+            """### 概览
+本工具可用于建模退休可持续性、养老金从积累阶段转入退休金阶段、Transfer Balance Cap 限制，以及不同情景下的税务影响。"""
+        )
+    )
 
 
 # ============================================================
@@ -835,7 +886,7 @@ with st.sidebar:
 # ============================================================
 
 if st.button(
-    "Reset Preset Assumptions to Default",
+    t("Reset Preset Assumptions to Default", "将预设假设重置为默认值"),
     key="reset_preset_table_button_panel",
 ):
     st.session_state.preset_table_df = get_default_preset_table_df()
@@ -847,12 +898,12 @@ with st.container(border=True):
     top_left, top_right = st.columns([2, 1])
 
     with top_left:
-        st.subheader("Assumption Settings Panel")
-        st.caption("Manage reusable preset assumptions here. The modelling engine stores these as decimals such as 0.03 = 3.0%.")
+        st.subheader(t("Assumption Settings Panel", "假设设置面板"))
+        st.caption(t("Manage reusable preset assumptions here. The modelling engine stores these as decimals such as 0.03 = 3.0%.", "在此管理可重复使用的预设假设。建模引擎使用小数表示，例如 0.03 = 3.0%。"))
 
     with top_right:
-        st.metric("Active Preset", preset_choice)
-        st.caption("Preset selection stays in the sidebar for quick scenario control.")
+        st.metric(t("Active Preset", "当前预设"), preset_choice)
+        st.caption(t("Preset selection stays in the sidebar for quick scenario control.", "预设选择保留在侧边栏，便于快速切换情景。"))
 
     preset_table_df = st.data_editor(
         st.session_state.preset_table_df,
@@ -883,18 +934,18 @@ with st.container(border=True):
 # ============================================================
 
 input_sections = [
-    "Report",
-    "Projection",
-    "Person 1",
-    "Person 2",
-    "Household",
-    "Contributions",
-    "Returns",
-    "Simulation",
+    t("Report", "报告"),
+    t("Projection", "投射"),
+    t("Person 1", "人物 1"),
+    t("Person 2", "人物 2"),
+    t("Household", "家庭"),
+    t("Contributions", "缴款"),
+    t("Returns", "回报"),
+    t("Simulation", "模拟"),
 ]
 
 active_input_section = st.segmented_control(
-    "Input Section",
+    t("Input Section", "输入区"),
     options=input_sections,
     selection_mode="single",
     default=st.session_state.active_input_section,
@@ -902,54 +953,54 @@ active_input_section = st.segmented_control(
 )
 
 if active_input_section == "Report":
-    st.subheader("Report")
+    st.subheader(t("Report", "报告"))
     report_title = st.text_input(
-        "Title (Optional)",
+        t("Title (Optional)", "标题（可选）"),
         value=st.session_state.report_title,
         key="report_title_input",
     )
 
-    st.subheader("Names")
+    st.subheader(t("Names", "姓名"))
     name_col1, name_col2 = st.columns(2)
     with name_col1:
         person1_name = st.text_input(
-            "Person 1 Name (Optional)",
+            t("Person 1 Name (Optional)", "人物 1 姓名（可选）"),
             value=st.session_state.person1_name,
             key="person1_name_input",
         )
     with name_col2:
         person2_name = st.text_input(
-            "Person 2 Name (Optional)",
+            t("Person 2 Name (Optional)", "人物 2 姓名（可选）"),
             value=st.session_state.person2_name,
             key="person2_name_input",
         )
 
 elif active_input_section == "Projection":
-    st.subheader("Projection Timing")
+    st.subheader(t("Projection Timing", "投射时间设置"))
     col1, col2, col3 = st.columns(3)
     with col1:
         start_financial_year = st.number_input(
-            "Start Financial Year",
+            t("Start Financial Year", "起始财政年度"),
             value=int(st.session_state.start_financial_year),
             step=1,
             min_value=2000,
         )
     with col2:
         projection_years = st.number_input(
-            "Projection Years",
+            t("Projection Years", "投射年数"),
             value=int(st.session_state.projection_years),
             step=1,
             min_value=1,
         )
     with col3:
         retirement_spending_trigger = st.selectbox(
-            "Retirement Spending Trigger",
-            options=["Both Retired", "Either Retired"],
-            index=0 if st.session_state.retirement_spending_trigger == "Both Retired" else 1,
+            t("Retirement Spending Trigger", "退休支出触发条件"),
+            options=[t("Both Retired", "两人都退休"), t("Either Retired", "任一人退休")],
+            index=0 if st.session_state.retirement_spending_trigger in ["Both Retired", t("Both Retired", "两人都退休")] else 1,
         )
 
 elif active_input_section == "Person 1":
-    st.subheader("Person 1")
+    st.subheader(t("Person 1", "人物 1"))
     p1a, p1b, p1c = st.columns(3)
     with p1a:
         person1_current_age = st.number_input("Person 1 Current Age", value=int(st.session_state.person1_current_age), step=1)
@@ -965,7 +1016,7 @@ elif active_input_section == "Person 1":
         person1_annual_income = currency_text_input("Person 1 Annual Income", st.session_state.person1_annual_income, "person1_annual_income_input")
 
 elif active_input_section == "Person 2":
-    st.subheader("Person 2")
+    st.subheader(t("Person 2", "人物 2"))
     p2a, p2b, p2c = st.columns(3)
     with p2a:
         person2_current_age = st.number_input("Person 2 Current Age", value=int(st.session_state.person2_current_age), step=1)
@@ -981,7 +1032,7 @@ elif active_input_section == "Person 2":
         person2_annual_income = currency_text_input("Person 2 Annual Income", st.session_state.person2_annual_income, "person2_annual_income_input")
 
 elif active_input_section == "Household":
-    st.subheader("Household")
+    st.subheader(t("Household", "家庭"))
     hh1, hh2 = st.columns(2)
     with hh1:
         non_super_balance = currency_text_input("Non-Super Balance", st.session_state.non_super_balance, "non_super_balance_input")
@@ -993,7 +1044,7 @@ elif active_input_section == "Household":
         non_super_ownership_person1 = percentage_text_input("Person 1 Ownership %", st.session_state.non_super_ownership_person1_pct / 100.0, "non_super_ownership_person1_input", decimals=1) * 100.0
 
 elif active_input_section == "Contributions":
-    st.subheader("Contribution Schedule")
+    st.subheader(t("Contribution Schedule", "缴款计划"))
     contribution_events_df = st.data_editor(
         st.session_state.contribution_events_df,
         key="contribution_events_editor",
@@ -1008,8 +1059,8 @@ elif active_input_section == "Contributions":
     )
 
 elif active_input_section == "Returns":
-    if scenario_mode == "Single Scenario" and preset_choice == "Custom":
-        st.subheader("Return Assumptions")
+    if scenario_mode == t("Single Scenario", "单一情景") and preset_choice == "Custom":
+        st.subheader(t("Return Assumptions", "回报假设"))
         r1, r2, r3 = st.columns(3)
         with r1:
             super_income_return_mean = percentage_text_input("Super Income Return Mean", st.session_state.super_income_return_mean, "super_income_return_mean_input", decimals=1)
@@ -1027,8 +1078,8 @@ elif active_input_section == "Returns":
         selected_preset = preset_choice if preset_choice in runtime_presets else "Base Case"
         selected_values = runtime_presets[selected_preset]
 
-        st.subheader("Return Assumptions")
-        st.info(f"Using values from Assumption Settings Panel: {selected_preset}")
+        st.subheader(t("Return Assumptions", "回报假设"))
+        st.info(t(f"Using values from Assumption Settings Panel: {selected_preset}", f"当前使用假设设置面板中的数值：{selected_preset}"))
 
         display_df = pd.DataFrame(
             {
@@ -1077,7 +1128,7 @@ elif active_input_section == "Returns":
         inflation_rate = float(selected_values["inflation_rate"])
 
 elif active_input_section == "Simulation":
-    st.subheader("Simulation")
+    st.subheader(t("Simulation", "模拟"))
     sim1, sim2 = st.columns(2)
     with sim1:
         number_of_simulations = st.number_input("Number of Simulations", value=int(st.session_state.number_of_simulations), step=1000)
@@ -1188,7 +1239,7 @@ base_inputs = {
 # ============================================================
 
 if run_button:
-    if scenario_mode == "Single Scenario":
+    if scenario_mode == t("Single Scenario", "单一情景"):
         if preset_choice == "Custom":
             scenario_inputs_map = {"Custom": base_inputs.copy()}
         else:
@@ -1304,7 +1355,7 @@ if st.session_state.comparison_results is not None:
 
     common_inputs = next(iter(comparison_results.values()))["inputs"]
 
-    st.subheader("Scenario Comparison Summary")
+    st.subheader(t("Scenario Comparison Summary", "情景比较摘要"))
     st.dataframe(
         comparison_df[["scenario", "success_rate_label", "median_final_wealth_label", "p10_final_wealth_label", "p90_final_wealth_label"]],
         use_container_width=True,
@@ -1317,31 +1368,32 @@ if st.session_state.comparison_results is not None:
     st.plotly_chart(median_fig, use_container_width=True, key="median_wealth_comparison")
 
     selected_scenario = st.selectbox(
-        "Select Scenario",
+        t("Select Scenario", "选择情景"),
         options=list(comparison_results.keys()),
         key="selected_scenario_results",
     )
     selected_result = comparison_results[selected_scenario]
 
-    if view_mode == "Adviser View":
-        st.subheader(f"Adviser Summary - {selected_scenario}")
+    if view_mode == t("Adviser View", "顾问视图"):
+        st.subheader(t(f"Adviser Summary - {selected_scenario}", f"顾问摘要 - {selected_scenario}"))
+        st.info(t("Adviser Note: Outputs are indicative only and should be reviewed in the context of client objectives, risk profile, and current legislation before forming advice.", "顾问提示：本输出仅供指示参考，在形成建议前应结合客户目标、风险承受能力及现行法规进行审阅。"))
 
         top_col1, top_col2 = st.columns(2)
-        top_col1.metric("Success Rate", f"{selected_result['success_rate']:.1%}")
-        top_col2.metric("Median Final Wealth", f"${selected_result['median_final_wealth']:,.0f}")
+        top_col1.metric(t("Success Rate", "成功率"), f"{selected_result['success_rate']:.1%}")
+        top_col2.metric(t("Median Final Wealth", "最终财富中位数"), f"${selected_result['median_final_wealth']:,.0f}")
 
         bottom_col1, bottom_col2, bottom_col3 = st.columns(3)
-        bottom_col1.metric("P10 Final Wealth", f"${selected_result['p10_final_wealth']:,.0f}")
-        bottom_col2.metric("P90 Final Wealth", f"${selected_result['p90_final_wealth']:,.0f}")
-        bottom_col3.metric("Spread (P90 - P10)", f"${selected_result['p90_final_wealth'] - selected_result['p10_final_wealth']:,.0f}")
+        bottom_col1.metric(t("P10 Final Wealth", "P10 最终财富"), f"${selected_result['p10_final_wealth']:,.0f}")
+        bottom_col2.metric(t("P90 Final Wealth", "P90 最终财富"), f"${selected_result['p90_final_wealth']:,.0f}")
+        bottom_col3.metric(t("Spread (P90 - P10)", "区间差值（P90 - P10）"), f"${selected_result['p90_final_wealth'] - selected_result['p10_final_wealth']:,.0f}")
 
         missing_validation_cols = get_missing_validation_columns(selected_result["det_df"])
         if missing_validation_cols:
-            st.warning("Validation table is using fallback zeros for missing columns.")
+            st.warning(t("Validation table is using fallback zeros for missing columns.", "验证表对缺失栏位使用了回退零值。"))
             st.caption(", ".join(missing_validation_cols))
 
         adviser_cashflow_df = build_adviser_cashflow_df(selected_result["det_df"])
-        st.subheader("Adviser Cashflow Summary")
+        st.subheader(t("Adviser Cashflow Summary", "顾问现金流摘要"))
         st.dataframe(
             adviser_cashflow_df,
             use_container_width=True,
@@ -1355,7 +1407,7 @@ if st.session_state.comparison_results is not None:
         )
 
         pension_tax_free_summary_df = build_pension_tax_free_summary_df(selected_result["det_df"])
-        st.subheader("Pension Tax-Free Validation Summary")
+        st.subheader(t("Pension Tax-Free Validation Summary", "退休金免税验证摘要"))
         st.dataframe(
             pension_tax_free_summary_df,
             use_container_width=True,
@@ -1366,7 +1418,7 @@ if st.session_state.comparison_results is not None:
         )
 
         debug_df = build_adviser_debug_df(selected_result["det_df"])
-        st.subheader("Adviser Debug Table")
+        st.subheader(t("Adviser Debug Table", "顾问调试表"))
         st.dataframe(
             debug_df,
             use_container_width=True,
@@ -1408,7 +1460,7 @@ if st.session_state.comparison_results is not None:
         )
 
         cgt_validation_df = build_cgt_validation_df(selected_result["det_df"])
-        with st.expander("Detailed CGT / Pension Validation Table", expanded=False):
+        with st.expander(t("Detailed CGT / Pension Validation Table", "详细 CGT / 退休金验证表"), expanded=False):
             st.dataframe(
                 cgt_validation_df,
                 use_container_width=True,
@@ -1464,20 +1516,20 @@ if st.session_state.comparison_results is not None:
         )
 
         st.download_button(
-            label="Download Excel",
+            label=t("Download Excel", "下载 Excel"),
             data=excel_file,
             file_name=build_export_filename(selected_result["inputs"].get("report_title", ""), "financial_projection", selected_scenario, "xlsx"),
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
 
     else:
-        st.subheader(f"Client Summary - {selected_scenario}")
+        st.subheader(t(f"Client Summary - {selected_scenario}", f"客户摘要 - {selected_scenario}"))
 
         col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Success Rate", f"{selected_result['success_rate']:.1%}")
-        col2.metric("Median Final Wealth", f"${selected_result['median_final_wealth']:,.0f}")
-        col3.metric("P10 Final Wealth", f"${selected_result['p10_final_wealth']:,.0f}")
-        col4.metric("P90 Final Wealth", f"${selected_result['p90_final_wealth']:,.0f}")
+        col1.metric(t("Success Rate", "成功率"), f"{selected_result['success_rate']:.1%}")
+        col2.metric(t("Median Final Wealth", "最终财富中位数"), f"${selected_result['median_final_wealth']:,.0f}")
+        col3.metric(t("P10 Final Wealth", "P10 最终财富"), f"${selected_result['p10_final_wealth']:,.0f}")
+        col4.metric(t("P90 Final Wealth", "P90 最终财富"), f"${selected_result['p90_final_wealth']:,.0f}")
 
         det_single_df = selected_result["det_df"]
         det_single_compare_df = det_single_df.copy()
@@ -1493,7 +1545,7 @@ if st.session_state.comparison_results is not None:
         st.plotly_chart(failure_fig, use_container_width=True, key=chart_key("failure", selected_scenario, view_mode, "client"))
 
         client_assumption_df = assumption_details_df[assumption_details_df["scenario"] == selected_scenario]
-        st.subheader("Selected Scenario Assumptions")
+        st.subheader(t("Selected Scenario Assumptions", "所选情景假设"))
         st.dataframe(client_assumption_df, use_container_width=True)
 
         excel_file = dataframe_to_excel_bytes(
@@ -1509,11 +1561,11 @@ if st.session_state.comparison_results is not None:
         )
 
         st.download_button(
-            label="Download Excel",
+            label=t("Download Excel", "下载 Excel"),
             data=excel_file,
             file_name=build_export_filename(selected_result["inputs"].get("report_title", ""), "financial_projection", selected_scenario, "xlsx"),
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
 
 else:
-    st.info("Adjust the inputs in the tabs above, then click Run Simulation in the sidebar.")
+    st.info(t("Adjust the inputs in the tabs above, then click Run Simulation in the sidebar.", "请先在上方标签页调整输入，再点击侧边栏中的“运行模拟”。"))
