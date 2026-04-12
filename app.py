@@ -763,7 +763,7 @@ st.session_state.preset_table_df = ensure_valid_preset_table_df(
 )
 
 if "active_input_section" not in st.session_state:
-    st.session_state.active_input_section = "Projection"
+    st.session_state.active_input_section = "projection"
 
 
 # ============================================================
@@ -933,26 +933,67 @@ with st.container(border=True):
 # SECTION: MAIN INPUT NAVIGATION
 # ============================================================
 
-input_sections = [
-    t("Report", "报告"),
-    t("Projection", "投射"),
-    t("Person 1", "人物 1"),
-    t("Person 2", "人物 2"),
-    t("Household", "家庭"),
-    t("Contributions", "缴款"),
-    t("Returns", "回报"),
-    t("Simulation", "模拟"),
+section_keys = [
+    "report",
+    "projection",
+    "person1",
+    "person2",
+    "household",
+    "contributions",
+    "returns",
+    "simulation",
 ]
 
-active_input_section = st.segmented_control(
+section_labels = {
+    "report": t("Report", "报告"),
+    "projection": t("Projection", "预测设置"),
+    "person1": t("Person 1", "人物 1"),
+    "person2": t("Person 2", "人物 2"),
+    "household": t("Household", "家庭"),
+    "contributions": t("Contributions", "缴款设置"),
+    "returns": t("Returns", "回报假设"),
+    "simulation": t("Simulation", "模拟设置"),
+}
+
+legacy_section_map = {
+    "Report": "report",
+    "Projection": "projection",
+    "Person 1": "person1",
+    "Person 2": "person2",
+    "Household": "household",
+    "Contributions": "contributions",
+    "Returns": "returns",
+    "Simulation": "simulation",
+    "报告": "report",
+    "预测设置": "projection",
+    "人物 1": "person1",
+    "人物 2": "person2",
+    "家庭": "household",
+    "缴款设置": "contributions",
+    "回报假设": "returns",
+    "模拟设置": "simulation",
+}
+
+current_section_key = st.session_state.get("active_input_section", "projection")
+current_section_key = legacy_section_map.get(current_section_key, current_section_key)
+
+if current_section_key not in section_keys:
+    current_section_key = "projection"
+
+selected_section_label = st.segmented_control(
     t("Input Section", "输入区"),
-    options=input_sections,
+    options=[section_labels[k] for k in section_keys],
     selection_mode="single",
-    default=st.session_state.active_input_section,
-    key="active_input_section",
+    default=section_labels[current_section_key],
 )
 
-if active_input_section == "Report":
+active_input_section = next(
+    k for k in section_keys if section_labels[k] == selected_section_label
+)
+
+st.session_state.active_input_section = active_input_section
+
+if active_input_section == "report":
     st.subheader(t("Report", "报告"))
     report_title = st.text_input(
         t("Title (Optional)", "标题（可选）"),
@@ -975,8 +1016,8 @@ if active_input_section == "Report":
             key="person2_name_input",
         )
 
-elif active_input_section == "Projection":
-    st.subheader(t("Projection Timing", "投射时间设置"))
+elif active_input_section == "projection":
+    st.subheader(t("Projection Timing", "预测时间设置"))
     col1, col2, col3 = st.columns(3)
     with col1:
         start_financial_year = st.number_input(
@@ -987,7 +1028,7 @@ elif active_input_section == "Projection":
         )
     with col2:
         projection_years = st.number_input(
-            t("Projection Years", "投射年数"),
+            t("Projection Years", "预测年数"),
             value=int(st.session_state.projection_years),
             step=1,
             min_value=1,
@@ -995,55 +1036,161 @@ elif active_input_section == "Projection":
     with col3:
         retirement_spending_trigger = st.selectbox(
             t("Retirement Spending Trigger", "退休支出触发条件"),
-            options=[t("Both Retired", "两人都退休"), t("Either Retired", "任一人退休")],
-            index=0 if st.session_state.retirement_spending_trigger in ["Both Retired", t("Both Retired", "两人都退休")] else 1,
+            options=[
+                t("Both Retired", "双方都退休"),
+                t("Either Retired", "任一方退休"),
+            ],
+            index=0 if st.session_state.retirement_spending_trigger in ["Both Retired", "双方都退休"] else 1,
         )
 
-elif active_input_section == "Person 1":
+        if retirement_spending_trigger == t("Both Retired", "双方都退休"):
+            retirement_spending_trigger = "Both Retired"
+        else:
+            retirement_spending_trigger = "Either Retired"
+
+elif active_input_section == "person1":
     st.subheader(t("Person 1", "人物 1"))
     p1a, p1b, p1c = st.columns(3)
     with p1a:
-        person1_current_age = st.number_input("Person 1 Current Age", value=int(st.session_state.person1_current_age), step=1)
-        person1_accum_super_balance = currency_text_input("Person 1 Accumulation Super Balance", st.session_state.person1_accum_super_balance, "person1_accum_super_balance_input")
-        person1_pension_super_balance = currency_text_input("Person 1 Pension Super Balance", st.session_state.person1_pension_super_balance, "person1_pension_super_balance_input")
+        person1_current_age = st.number_input(
+            t("Person 1 Current Age", "人物 1 当前年龄"),
+            value=int(st.session_state.person1_current_age),
+            step=1,
+        )
+        person1_accum_super_balance = currency_text_input(
+            t("Person 1 Accumulation Super Balance", "人物 1 累积型养老金余额"),
+            st.session_state.person1_accum_super_balance,
+            "person1_accum_super_balance_input",
+        )
+        person1_pension_super_balance = currency_text_input(
+            t("Person 1 Pension Super Balance", "人物 1 养老金阶段余额"),
+            st.session_state.person1_pension_super_balance,
+            "person1_pension_super_balance_input",
+        )
     with p1b:
-        person1_retirement_age = st.number_input("Person 1 Retirement Age", value=int(st.session_state.person1_retirement_age), step=1)
-        person1_accum_super_cost_base = currency_text_input("Person 1 Accumulation Super Cost Base", st.session_state.person1_accum_super_cost_base, "person1_accum_super_cost_base_input")
-        person1_pension_super_cost_base = currency_text_input("Person 1 Pension Super Cost Base", st.session_state.person1_pension_super_cost_base, "person1_pension_super_cost_base_input")
+        person1_retirement_age = st.number_input(
+            t("Person 1 Retirement Age", "人物 1 退休年龄"),
+            value=int(st.session_state.person1_retirement_age),
+            step=1,
+        )
+        person1_accum_super_cost_base = currency_text_input(
+            t("Person 1 Accumulation Super Cost Base", "人物 1 累积型养老金成本基础"),
+            st.session_state.person1_accum_super_cost_base,
+            "person1_accum_super_cost_base_input",
+        )
+        person1_pension_super_cost_base = currency_text_input(
+            t("Person 1 Pension Super Cost Base", "人物 1 养老金阶段成本基础"),
+            st.session_state.person1_pension_super_cost_base,
+            "person1_pension_super_cost_base_input",
+        )
     with p1c:
-        person1_pension_start_age = st.number_input("Person 1 Pension Start Age", value=int(st.session_state.person1_pension_start_age), step=1)
-        person1_transfer_balance_cap = currency_text_input("Person 1 Transfer Balance Cap", st.session_state.person1_transfer_balance_cap, "person1_transfer_balance_cap_input")
-        person1_annual_income = currency_text_input("Person 1 Annual Income", st.session_state.person1_annual_income, "person1_annual_income_input")
+        person1_pension_start_age = st.number_input(
+            t("Person 1 Pension Start Age", "人物 1 养老金开始年龄"),
+            value=int(st.session_state.person1_pension_start_age),
+            step=1,
+        )
+        person1_transfer_balance_cap = currency_text_input(
+            t("Person 1 Transfer Balance Cap", "人物 1 转移余额上限"),
+            st.session_state.person1_transfer_balance_cap,
+            "person1_transfer_balance_cap_input",
+        )
+        person1_annual_income = currency_text_input(
+            t("Person 1 Annual Income", "人物 1 年收入"),
+            st.session_state.person1_annual_income,
+            "person1_annual_income_input",
+        )
 
-elif active_input_section == "Person 2":
+elif active_input_section == "person2":
     st.subheader(t("Person 2", "人物 2"))
     p2a, p2b, p2c = st.columns(3)
     with p2a:
-        person2_current_age = st.number_input("Person 2 Current Age", value=int(st.session_state.person2_current_age), step=1)
-        person2_accum_super_balance = currency_text_input("Person 2 Accumulation Super Balance", st.session_state.person2_accum_super_balance, "person2_accum_super_balance_input")
-        person2_pension_super_balance = currency_text_input("Person 2 Pension Super Balance", st.session_state.person2_pension_super_balance, "person2_pension_super_balance_input")
+        person2_current_age = st.number_input(
+            t("Person 2 Current Age", "人物 2 当前年龄"),
+            value=int(st.session_state.person2_current_age),
+            step=1,
+        )
+        person2_accum_super_balance = currency_text_input(
+            t("Person 2 Accumulation Super Balance", "人物 2 累积型养老金余额"),
+            st.session_state.person2_accum_super_balance,
+            "person2_accum_super_balance_input",
+        )
+        person2_pension_super_balance = currency_text_input(
+            t("Person 2 Pension Super Balance", "人物 2 养老金阶段余额"),
+            st.session_state.person2_pension_super_balance,
+            "person2_pension_super_balance_input",
+        )
     with p2b:
-        person2_retirement_age = st.number_input("Person 2 Retirement Age", value=int(st.session_state.person2_retirement_age), step=1)
-        person2_accum_super_cost_base = currency_text_input("Person 2 Accumulation Super Cost Base", st.session_state.person2_accum_super_cost_base, "person2_accum_super_cost_base_input")
-        person2_pension_super_cost_base = currency_text_input("Person 2 Pension Super Cost Base", st.session_state.person2_pension_super_cost_base, "person2_pension_super_cost_base_input")
+        person2_retirement_age = st.number_input(
+            t("Person 2 Retirement Age", "人物 2 退休年龄"),
+            value=int(st.session_state.person2_retirement_age),
+            step=1,
+        )
+        person2_accum_super_cost_base = currency_text_input(
+            t("Person 2 Accumulation Super Cost Base", "人物 2 累积型养老金成本基础"),
+            st.session_state.person2_accum_super_cost_base,
+            "person2_accum_super_cost_base_input",
+        )
+        person2_pension_super_cost_base = currency_text_input(
+            t("Person 2 Pension Super Cost Base", "人物 2 养老金阶段成本基础"),
+            st.session_state.person2_pension_super_cost_base,
+            "person2_pension_super_cost_base_input",
+        )
     with p2c:
-        person2_pension_start_age = st.number_input("Person 2 Pension Start Age", value=int(st.session_state.person2_pension_start_age), step=1)
-        person2_transfer_balance_cap = currency_text_input("Person 2 Transfer Balance Cap", st.session_state.person2_transfer_balance_cap, "person2_transfer_balance_cap_input")
-        person2_annual_income = currency_text_input("Person 2 Annual Income", st.session_state.person2_annual_income, "person2_annual_income_input")
+        person2_pension_start_age = st.number_input(
+            t("Person 2 Pension Start Age", "人物 2 养老金开始年龄"),
+            value=int(st.session_state.person2_pension_start_age),
+            step=1,
+        )
+        person2_transfer_balance_cap = currency_text_input(
+            t("Person 2 Transfer Balance Cap", "人物 2 转移余额上限"),
+            st.session_state.person2_transfer_balance_cap,
+            "person2_transfer_balance_cap_input",
+        )
+        person2_annual_income = currency_text_input(
+            t("Person 2 Annual Income", "人物 2 年收入"),
+            st.session_state.person2_annual_income,
+            "person2_annual_income_input",
+        )
 
-elif active_input_section == "Household":
+elif active_input_section == "household":
     st.subheader(t("Household", "家庭"))
     hh1, hh2 = st.columns(2)
     with hh1:
-        non_super_balance = currency_text_input("Non-Super Balance", st.session_state.non_super_balance, "non_super_balance_input")
-        annual_living_expenses = currency_text_input("Annual Living Expenses", st.session_state.annual_living_expenses, "annual_living_expenses_input")
-        cgt_discount_rate = percentage_text_input("CGT Discount Rate", float(st.session_state.cgt_discount_rate), "cgt_discount_rate_input", decimals=1)
+        non_super_balance = currency_text_input(
+            t("Non-Super Balance", "非养老金资产余额"),
+            st.session_state.non_super_balance,
+            "non_super_balance_input",
+        )
+        annual_living_expenses = currency_text_input(
+            t("Annual Living Expenses", "年度生活支出"),
+            st.session_state.annual_living_expenses,
+            "annual_living_expenses_input",
+        )
+        cgt_discount_rate = percentage_text_input(
+            t("CGT Discount Rate", "资本利得税折扣率"),
+            float(st.session_state.cgt_discount_rate),
+            "cgt_discount_rate_input",
+            decimals=1,
+        )
     with hh2:
-        non_super_cost_base = currency_text_input("Non-Super Cost Base", st.session_state.non_super_cost_base, "non_super_cost_base_input")
-        retirement_spending = currency_text_input("Retirement Spending", st.session_state.retirement_spending, "retirement_spending_input")
-        non_super_ownership_person1 = percentage_text_input("Person 1 Ownership %", st.session_state.non_super_ownership_person1_pct / 100.0, "non_super_ownership_person1_input", decimals=1) * 100.0
+        non_super_cost_base = currency_text_input(
+            t("Non-Super Cost Base", "非养老金资产成本基础"),
+            st.session_state.non_super_cost_base,
+            "non_super_cost_base_input",
+        )
+        retirement_spending = currency_text_input(
+            t("Retirement Spending", "退休后支出"),
+            st.session_state.retirement_spending,
+            "retirement_spending_input",
+        )
+        non_super_ownership_person1 = percentage_text_input(
+            t("Person 1 Ownership %", "人物 1 持有比例 %"),
+            st.session_state.non_super_ownership_person1_pct / 100.0,
+            "non_super_ownership_person1_input",
+            decimals=1,
+        ) * 100.0
 
-elif active_input_section == "Contributions":
+elif active_input_section == "contributions":
     st.subheader(t("Contribution Schedule", "缴款计划"))
     contribution_events_df = st.data_editor(
         st.session_state.contribution_events_df,
@@ -1051,50 +1198,115 @@ elif active_input_section == "Contributions":
         num_rows="dynamic",
         use_container_width=True,
         column_config={
-            "financial_year": st.column_config.NumberColumn("Financial Year", min_value=2000, step=1),
-            "person": st.column_config.SelectboxColumn("Person", options=["Person 1", "Person 2"]),
-            "contribution_type": st.column_config.SelectboxColumn("Contribution Type", options=["personal_deductible", "non_concessional"]),
-            "amount": st.column_config.NumberColumn("Amount", min_value=0.0, step=1000.0, format="$%.0f"),
+            "financial_year": st.column_config.NumberColumn(
+                t("Financial Year", "财政年度"),
+                min_value=2000,
+                step=1,
+            ),
+            "person": st.column_config.SelectboxColumn(
+                t("Person", "人物"),
+                options=["Person 1", "Person 2"],
+            ),
+            "contribution_type": st.column_config.SelectboxColumn(
+                t("Contribution Type", "缴款类型"),
+                options=["personal_deductible", "non_concessional"],
+            ),
+            "amount": st.column_config.NumberColumn(
+                t("Amount", "金额"),
+                min_value=0.0,
+                step=1000.0,
+                format="$%.0f",
+            ),
         },
     )
 
-elif active_input_section == "Returns":
-    if scenario_mode == t("Single Scenario", "单一情景") and preset_choice == "Custom":
+elif active_input_section == "returns":
+    if scenario_mode == "Single Scenario" and preset_choice == "Custom":
         st.subheader(t("Return Assumptions", "回报假设"))
         r1, r2, r3 = st.columns(3)
         with r1:
-            super_income_return_mean = percentage_text_input("Super Income Return Mean", st.session_state.super_income_return_mean, "super_income_return_mean_input", decimals=1)
-            super_capital_return_mean = percentage_text_input("Super Capital Return Mean", st.session_state.super_capital_return_mean, "super_capital_return_mean_input", decimals=1)
-            inflation_rate = percentage_text_input("Inflation Rate", st.session_state.inflation_rate, "inflation_rate_input", decimals=1)
+            super_income_return_mean = percentage_text_input(
+                t("Super Income Return Mean", "养老金收益型回报均值"),
+                st.session_state.super_income_return_mean,
+                "super_income_return_mean_input",
+                decimals=1,
+            )
+            super_capital_return_mean = percentage_text_input(
+                t("Super Capital Return Mean", "养老金资本增值回报均值"),
+                st.session_state.super_capital_return_mean,
+                "super_capital_return_mean_input",
+                decimals=1,
+            )
+            inflation_rate = percentage_text_input(
+                t("Inflation Rate", "通胀率"),
+                st.session_state.inflation_rate,
+                "inflation_rate_input",
+                decimals=1,
+            )
         with r2:
-            super_income_return_std = percentage_text_input("Super Income Return Std", st.session_state.super_income_return_std, "super_income_return_std_input", decimals=1)
-            super_capital_return_std = percentage_text_input("Super Capital Return Std", st.session_state.super_capital_return_std, "super_capital_return_std_input", decimals=1)
+            super_income_return_std = percentage_text_input(
+                t("Super Income Return Std", "养老金收益型回报波动"),
+                st.session_state.super_income_return_std,
+                "super_income_return_std_input",
+                decimals=1,
+            )
+            super_capital_return_std = percentage_text_input(
+                t("Super Capital Return Std", "养老金资本增值回报波动"),
+                st.session_state.super_capital_return_std,
+                "super_capital_return_std_input",
+                decimals=1,
+            )
         with r3:
-            non_super_income_return_mean = percentage_text_input("Non-Super Income Return Mean", st.session_state.non_super_income_return_mean, "non_super_income_return_mean_input", decimals=1)
-            non_super_capital_return_mean = percentage_text_input("Non-Super Capital Return Mean", st.session_state.non_super_capital_return_mean, "non_super_capital_return_mean_input", decimals=1)
-            non_super_income_return_std = percentage_text_input("Non-Super Income Return Std", st.session_state.non_super_income_return_std, "non_super_income_return_std_input", decimals=1)
-            non_super_capital_return_std = percentage_text_input("Non-Super Capital Return Std", st.session_state.non_super_capital_return_std, "non_super_capital_return_std_input", decimals=1)
+            non_super_income_return_mean = percentage_text_input(
+                t("Non-Super Income Return Mean", "非养老金收益型回报均值"),
+                st.session_state.non_super_income_return_mean,
+                "non_super_income_return_mean_input",
+                decimals=1,
+            )
+            non_super_capital_return_mean = percentage_text_input(
+                t("Non-Super Capital Return Mean", "非养老金资本增值回报均值"),
+                st.session_state.non_super_capital_return_mean,
+                "non_super_capital_return_mean_input",
+                decimals=1,
+            )
+            non_super_income_return_std = percentage_text_input(
+                t("Non-Super Income Return Std", "非养老金收益型回报波动"),
+                st.session_state.non_super_income_return_std,
+                "non_super_income_return_std_input",
+                decimals=1,
+            )
+            non_super_capital_return_std = percentage_text_input(
+                t("Non-Super Capital Return Std", "非养老金资本增值回报波动"),
+                st.session_state.non_super_capital_return_std,
+                "non_super_capital_return_std_input",
+                decimals=1,
+            )
     else:
         selected_preset = preset_choice if preset_choice in runtime_presets else "Base Case"
         selected_values = runtime_presets[selected_preset]
 
         st.subheader(t("Return Assumptions", "回报假设"))
-        st.info(t(f"Using values from Assumption Settings Panel: {selected_preset}", f"当前使用假设设置面板中的数值：{selected_preset}"))
+        st.info(
+            t(
+                f"Using values from Assumption Settings Panel: {selected_preset}",
+                f"使用假设设置面板中的参数：{selected_preset}",
+            )
+        )
 
         display_df = pd.DataFrame(
             {
-                "Assumption": [
-                    "Super Income Return Mean",
-                    "Super Income Return Std",
-                    "Super Capital Return Mean",
-                    "Super Capital Return Std",
-                    "Non-Super Income Return Mean",
-                    "Non-Super Income Return Std",
-                    "Non-Super Capital Return Mean",
-                    "Non-Super Capital Return Std",
-                    "Inflation Rate",
+                t("Assumption", "假设"): [
+                    t("Super Income Return Mean", "养老金收益型回报均值"),
+                    t("Super Income Return Std", "养老金收益型回报波动"),
+                    t("Super Capital Return Mean", "养老金资本增值回报均值"),
+                    t("Super Capital Return Std", "养老金资本增值回报波动"),
+                    t("Non-Super Income Return Mean", "非养老金收益型回报均值"),
+                    t("Non-Super Income Return Std", "非养老金收益型回报波动"),
+                    t("Non-Super Capital Return Mean", "非养老金资本增值回报均值"),
+                    t("Non-Super Capital Return Std", "非养老金资本增值回报波动"),
+                    t("Inflation Rate", "通胀率"),
                 ],
-                "Value": [
+                t("Value", "数值"): [
                     selected_values["super_income_return_mean"] * 100.0,
                     selected_values["super_income_return_std"] * 100.0,
                     selected_values["super_capital_return_mean"] * 100.0,
@@ -1112,8 +1324,8 @@ elif active_input_section == "Returns":
             use_container_width=True,
             hide_index=True,
             column_config={
-                "Assumption": st.column_config.TextColumn("Assumption"),
-                "Value": st.column_config.NumberColumn("Value", format="%.1f%%"),
+                t("Assumption", "假设"): st.column_config.TextColumn(t("Assumption", "假设")),
+                t("Value", "数值"): st.column_config.NumberColumn(t("Value", "数值"), format="%.1f%%"),
             },
         )
 
@@ -1127,13 +1339,22 @@ elif active_input_section == "Returns":
         non_super_capital_return_std = float(selected_values["non_super_capital_return_std"])
         inflation_rate = float(selected_values["inflation_rate"])
 
-elif active_input_section == "Simulation":
-    st.subheader(t("Simulation", "模拟"))
+elif active_input_section == "simulation":
+    st.subheader(t("Simulation", "模拟设置"))
     sim1, sim2 = st.columns(2)
     with sim1:
-        number_of_simulations = st.number_input("Number of Simulations", value=int(st.session_state.number_of_simulations), step=1000)
+        number_of_simulations = st.number_input(
+            t("Number of Simulations", "模拟次数"),
+            value=int(st.session_state.number_of_simulations),
+            step=1000,
+        )
     with sim2:
-        random_seed = st.number_input("Random Seed", value=int(st.session_state.random_seed), step=1)
+        random_seed = st.number_input(
+            t("Random Seed", "随机种子"),
+            value=int(st.session_state.random_seed),
+            step=1,
+        )
+        
 
 # ============================================================
 # SECTION: SESSION UPDATE
