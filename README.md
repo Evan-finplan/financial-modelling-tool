@@ -61,5 +61,6 @@ It does not constitute financial advice.
 
 ## 👤 Author
 
+Margaret (Yunfei) Chen
 Jinglei Zhang  
 Financial Planning / Data Science
