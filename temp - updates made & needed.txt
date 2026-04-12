@@ -1,0 +1,86 @@
+11/04/2026
+
+1. Pension有上限， $2.1m。多出的部分还是要有15%的income tax。是否考虑给每个人两个superannuation account，一个accumulation，一个pension。特殊情况是现在的pension就已经超出$2.1m。所以input 里面要分开输入现在的accumulation 和pension
+
+2. super contribution要分成concessional contribution （其中还要分super guarantee和personal deductible contribution）和non-concessional contribution。super guarantee是要根据employment income决定的。
+
+3. annual_non_super_savings 要变成surplus cash
+
+4. medicare levy总是开启，不需要成为一个input
+
+9. personal deductible contribution和non-concessional contribution需要手动择时输入。这个我不知道怎么表现出来。请帮我想逻辑和表现在代码里。需要允许输入‘某某年，personal deductible contribution或者non-concessional contribution，多少金额’
+
+10. Salary income需要inflation
+
+11. ncome tax rate。2027FY: 18200-45000 之间是15%，2028FY和之后，18200-45000 之间是14%。
+
+12. 从super取钱的时候，优先取accumulation account。accumulation account没有钱了，再从pension account取钱
+ 
+
+others
+
+part 1
+
+13. financial year的格式变成纯数字，不需要在输入的时候加上‘FY'，但是在图表里面在数轴的地方要加上FY。而且要在鼠标点上去悬浮的信息中加上financial year信息
+9. Conservative， Base Case， Optimistic三种情况的mean 和standard deviation，作为input 允许手动修改
+1. return rates要分成income rate 和capital return。mean和standard deviation也要分别输入。
+10. 超过65岁之后，不能有personal deductible contribution。
+11. 超过75岁之后，不能有non-concessional contribution
+7. 当concessional contribution或者non-concessional contribution大于各自的annual cap时候，给出Warning，要求review eligibility of carry forward concessional contribution 或者bring forward non-concessional contribution
+
+part 2
+
+2. 要计算CGT，所以non-super 和super asset初始要输入cost base。
+6. Pension account的收入都是不会有CGT 和income tax的
+8. retirement age的时候，将accumulation account balance尽量多的转到pension account，使得pension account达到个人的transfer balance cap。多出的部分留在accumulation account 里
+12. personal deductible contribution要在计算personal income tax的时候减少taxable income
+
+
+part 3
+
+3. 默认全都享受general CGT discount （non-super 50%，super 33.33%）
+4. 当需要从non-super或者super取钱来付shortfall的时候，要计算CGT。
+5. 卖出asset，计算CGT 的时候使用average-cost pool approximation.
+6. accumulation 和pension account，也要有cost base
+7. Adviser view 升级. 加一个表：Year | Withdrawal | CGT | Tax | Net cash
+
+
+5. accumulation转入pension的出发时间应该是Pension Start Age 
+6. retirement age 应该之影响employment income。不应该限制pension start age
+
+12/04/2026
+
+4. Adviser view 升级. 加一个表：Year | Withdrawal | CGT | Tax | Net cash
+5. 把 Debug Table 加进 Excel export
+7. Transfer Balance Cap enforcement
+3. 检查cost base的逻辑，确认cost base增加只是因为capital growth。
+4. input里Return Assumptions是灰色的无法操作。是否要去除
+5. Retirement Age 不是must be greater than or equal to Person 1 Current Age.
+6. Assumption Preset选择Base Case的时候，用的assumption是Preset Assumption Table里面的Base Case的么
+8. 加入标题（optional）.下载的文件要以下明明格式‘标题_文件名字_scenario_日期'
+9. 可以输入两个person 的名字（optional）
+10. Siderbar Input，里面的金额要改成‘$10,000,000’格式，百分比要改成‘3%’格式
+11. output table里面，金额要改成‘$10,000,000’格式，百分比要改成‘3%’格式
+2. 输出端要输出一个excel文件，把所有input和assumption都列出来
+12. Preset Assumption Table要有默认值。而且又出现了输入一个值之后就跳转到最开始界面的情况
+
+
+************************above are done****************************
+
+
+
+上线到网上。让这个可以在另一台电脑上访问这个网站使用
+chart里，retirement 和pension start 的竖线上的文字（例如P1 retirement 和P2 retirement）可能会重合，导致看不清
+
+*整个逻辑链条的细节都要写成文本。比如执行的顺序。先算谁后算谁。什么情况下要做什么。
+
+
+
+
+
+
+以后：
+
+1. 需要插入trust，company
+2. 需要插入rental property
+3. 需要插入main residence
