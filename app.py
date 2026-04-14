@@ -1,4 +1,5 @@
 
+import copy
 import io
 import re
 from datetime import datetime
@@ -131,8 +132,8 @@ def percentage_text_input(label, value, key, decimals=0, help_text=None, disable
 # SECTION: CONTRIBUTION EVENT HELPERS
 # ============================================================
 
-def contribution_events_to_records(events_df):
-    clean_df = normalise_contribution_events(events_df)
+def contribution_events_to_records(events_df, household_mode="Two People"):
+    clean_df = normalise_contribution_events(events_df, household_mode=household_mode)
     if clean_df.empty:
         return []
     return clean_df.to_dict(orient="records")
@@ -587,6 +588,31 @@ def chart_key(chart_type, scenario_name, view_mode, section_name="main"):
     return f"{chart_type}_{safe_scenario}_{safe_view}_{safe_section}"
 
 
+def build_current_result_bundle_from_session_state():
+    if st.session_state.comparison_results is None:
+        return None
+
+    return {
+        "comparison_results": copy.deepcopy(st.session_state.comparison_results),
+        "assumption_details_df": None if st.session_state.assumption_details_df is None else st.session_state.assumption_details_df.copy(),
+        "input_summary_df": None if st.session_state.input_summary_df is None else st.session_state.input_summary_df.copy(),
+        "contribution_schedule_export_df": None if st.session_state.contribution_schedule_export_df is None else st.session_state.contribution_schedule_export_df.copy(),
+        "input_warnings_by_scenario": copy.deepcopy(st.session_state.input_warnings_by_scenario),
+        "output_warnings_by_scenario": copy.deepcopy(st.session_state.output_warnings_by_scenario),
+        "last_run_inputs_by_scenario": copy.deepcopy(st.session_state.last_run_inputs_by_scenario),
+    }
+
+
+def get_active_result_bundle():
+    active_name = st.session_state.get("active_result_set_name", "Current Results")
+
+    if active_name == "Current Results":
+        return build_current_result_bundle_from_session_state()
+
+    saved_sets = st.session_state.get("saved_result_sets", {})
+    return saved_sets.get(active_name)
+
+
 def get_missing_validation_columns(det_df):
     required_cols = [
         "financial_year_end",
@@ -681,6 +707,9 @@ if "ui_language" not in st.session_state:
 
 defaults = {
     "comparison_results": None,
+    "saved_result_sets": {},
+    "active_result_set_name": "Current Results",
+    "save_result_name": "",
     "assumption_details_df": None,
     "input_summary_df": None,
     "contribution_schedule_export_df": None,
@@ -824,7 +853,10 @@ inflation_rate = st.session_state.inflation_rate
 
 number_of_simulations = int(st.session_state.number_of_simulations)
 random_seed = int(st.session_state.random_seed)
-contribution_events_df = st.session_state.contribution_events_df.copy()
+contribution_events_df = normalise_contribution_events(
+    st.session_state.contribution_events_df.copy(),
+    household_mode=household_mode,
+)
 
 
 # ============================================================
@@ -847,6 +879,25 @@ with st.sidebar:
         options=[t("Adviser View", "顾问视图"), t("Client View", "客户视图")],
     )
 
+    household_mode = st.radio(
+        t("Household Mode", "家庭模式"),
+        options=["One Person", "Two People"],
+        index=0 if st.session_state.household_mode == "One Person" else 1,
+        help=t(
+            "One Person mode excludes Person 2 from the model. Household spending is not reduced automatically.",
+            "单人模式会把人物 2 排除出模型，但不会自动下调家庭支出。",
+        ),
+    )
+    is_one_person_mode = household_mode == "One Person"
+
+    if is_one_person_mode:
+        st.info(
+            t(
+                "One Person mode sets Person 2 assets, income, super and contributions to zero inside the model. Review household spending manually if the previous assumptions were for two people.",
+                "单人模式会在模型内部将人物 2 的资产、收入、养老金与缴款全部视为 0。若你之前输入的是双人家庭支出，请手动检查 household spending。",
+            )
+        )
+
     scenario_mode = st.radio(
         t("Scenario Mode", "情景模式"),
         options=[t("Single Scenario", "单一情景"), t("Compare Standard Presets", "比较标准预设")],
@@ -858,6 +909,50 @@ with st.sidebar:
         key="assumption_preset",
         disabled=(scenario_mode == t("Compare Standard Presets", "比较标准预设")),
     )
+
+    st.markdown(f"### {t('Saved Results', '已保存结果')}")
+    saved_result_sets = st.session_state.get("saved_result_sets", {})
+    available_result_views = ["Current Results"] + list(saved_result_sets.keys())
+
+    current_active_result_name = st.session_state.get("active_result_set_name", "Current Results")
+    if current_active_result_name not in available_result_views:
+        current_active_result_name = "Current Results"
+        st.session_state.active_result_set_name = "Current Results"
+
+    active_result_set_name = st.selectbox(
+        t("Displayed Result Set", "当前显示结果集"),
+        options=available_result_views,
+        index=available_result_views.index(current_active_result_name),
+        key="active_result_set_name_selector",
+        help=t(
+            "Switch between the latest run and any saved snapshots in this session.",
+            "可在本次会话中切换查看最新结果与已保存快照。",
+        ),
+    )
+    st.session_state.active_result_set_name = active_result_set_name
+
+    save_result_name = st.text_input(
+        t("Save Current Results As", "将当前结果另存为"),
+        value=st.session_state.get("save_result_name", ""),
+        key="save_result_name_input",
+        placeholder=t("e.g. One person test", "例如：单人模式测试"),
+    )
+    st.session_state.save_result_name = save_result_name
+
+    save_results_button = st.button(
+        t("Save Current Results", "保存当前结果"),
+        use_container_width=True,
+        disabled=(st.session_state.comparison_results is None),
+    )
+
+    if active_result_set_name != "Current Results":
+        if st.button(t("Delete Selected Saved Results", "删除当前已保存结果"), use_container_width=True):
+            saved_sets = copy.deepcopy(st.session_state.get("saved_result_sets", {}))
+            if active_result_set_name in saved_sets:
+                del saved_sets[active_result_set_name]
+                st.session_state.saved_result_sets = saved_sets
+                st.session_state.active_result_set_name = "Current Results"
+                st.rerun()
 
     run_button = st.button(t("Run Simulation", "运行模拟"), type="primary", use_container_width=True)
 
@@ -1024,7 +1119,7 @@ if active_input_section == "report":
 
 elif active_input_section == "projection":
     st.subheader(t("Projection Timing", "预测时间设置"))
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3 = st.columns(3)
     with col1:
         start_financial_year = st.number_input(
             t("Start Financial Year", "起始财政年度"),
@@ -1053,13 +1148,6 @@ elif active_input_section == "projection":
             retirement_spending_trigger = "Both Retired"
         else:
             retirement_spending_trigger = "Either Retired"
-    with col4:
-        household_mode = st.selectbox(
-            t("Household Mode", "家庭模式"),
-            options=["One Person", "Two People"],
-            index=0 if st.session_state.household_mode == "One Person" else 1,
-        )
-        is_one_person_mode = household_mode == "One Person"
 
 elif active_input_section == "person1":
     st.subheader(t("Person 1", "人物 1"))
@@ -1190,6 +1278,13 @@ elif active_input_section == "person2":
 
 elif active_input_section == "household":
     st.subheader(t("Household", "家庭"))
+    if is_one_person_mode:
+        st.info(
+            t(
+                "One Person mode removes Person 2 from the model, but the household spending fields below stay exactly as entered. Reduce them manually if you want a true one-person budget.",
+                "单人模式会把人物 2 从模型中移除，但下面的家庭支出栏位不会自动变化。如果你希望按单人预算建模，请手动调低这些数值。",
+            )
+        )
     hh1, hh2 = st.columns(2)
     with hh1:
         non_super_balance = currency_text_input(
@@ -1517,12 +1612,33 @@ base_inputs = {
     "non_super_capital_return_std": non_super_capital_return_std,
     "number_of_simulations": int(number_of_simulations),
     "assumption_preset": preset_choice,
-    "contribution_events": contribution_events_to_records(contribution_events_df),
+    "contribution_events": contribution_events_to_records(contribution_events_df, household_mode=household_mode),
     "person1_accum_super_cost_base": person1_accum_super_cost_base,
     "person1_pension_super_cost_base": person1_pension_super_cost_base,
     "person2_accum_super_cost_base": person2_accum_super_cost_base,
     "person2_pension_super_cost_base": person2_pension_super_cost_base,
 }
+
+
+# ============================================================
+# SECTION: RESULT SNAPSHOT SAVE
+# ============================================================
+
+if save_results_button:
+    current_bundle = build_current_result_bundle_from_session_state()
+
+    if current_bundle is None:
+        st.error(t("There are no current results to save yet.", "当前还没有可保存的结果。"))
+    else:
+        snapshot_name = str(save_result_name or "").strip()
+        if not snapshot_name:
+            st.error(t("Please enter a name for the saved results.", "请先输入保存结果的名称。"))
+        else:
+            saved_sets = copy.deepcopy(st.session_state.get("saved_result_sets", {}))
+            saved_sets[snapshot_name] = current_bundle
+            st.session_state.saved_result_sets = saved_sets
+            st.session_state.active_result_set_name = snapshot_name
+            st.success(t(f"Saved results as: {snapshot_name}", f"已保存结果：{snapshot_name}"))
 
 
 # ============================================================
@@ -1605,19 +1721,27 @@ if run_button:
         st.session_state.input_warnings_by_scenario = input_warnings_by_scenario
         st.session_state.output_warnings_by_scenario = output_warnings_by_scenario
         st.session_state.last_run_inputs_by_scenario = scenario_inputs_map
+        st.session_state.active_result_set_name = "Current Results"
 
 
 # ============================================================
 # SECTION: RESULTS RENDERING
 # ============================================================
 
-if st.session_state.comparison_results is not None:
-    comparison_results = st.session_state.comparison_results
-    assumption_details_df = st.session_state.assumption_details_df
-    input_summary_df = st.session_state.input_summary_df
-    contribution_schedule_export_df = st.session_state.contribution_schedule_export_df
-    input_warnings_by_scenario = st.session_state.input_warnings_by_scenario
-    output_warnings_by_scenario = st.session_state.output_warnings_by_scenario
+active_result_bundle = get_active_result_bundle()
+
+if active_result_bundle is not None:
+    comparison_results = active_result_bundle["comparison_results"]
+    assumption_details_df = active_result_bundle["assumption_details_df"]
+    input_summary_df = active_result_bundle["input_summary_df"]
+    contribution_schedule_export_df = active_result_bundle["contribution_schedule_export_df"]
+    input_warnings_by_scenario = active_result_bundle["input_warnings_by_scenario"]
+    output_warnings_by_scenario = active_result_bundle["output_warnings_by_scenario"]
+
+    if st.session_state.get("active_result_set_name", "Current Results") == "Current Results":
+        st.caption(t("Showing: Current Results", "当前显示：最新结果"))
+    else:
+        st.caption(t(f"Showing saved snapshot: {st.session_state.get("active_result_set_name", "")}", f"当前显示：已保存快照 {st.session_state.get("active_result_set_name", "")}"))
 
     render_assumption_details(assumption_details_df)
     render_warning_sections(input_warnings_by_scenario, output_warnings_by_scenario, view_mode)
@@ -1859,4 +1983,4 @@ if st.session_state.comparison_results is not None:
         )
 
 else:
-    st.info(t("Adjust the inputs in the tabs above, then click Run Simulation in the sidebar.", "请先在上方标签页调整输入，再点击侧边栏中的“运行模拟”。"))
+    st.info(t("Adjust the inputs above, then click Run Simulation in the sidebar. Saved snapshots can also be reopened from the sidebar.", "请先在上方区域调整输入，再点击侧边栏中的“运行模拟”。已保存快照也可以在侧边栏重新打开。"))
