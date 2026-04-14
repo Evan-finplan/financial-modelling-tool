@@ -105,22 +105,24 @@ def parse_formatted_number(value, is_percentage=False):
     return number / 100.0 if is_percentage else number
 
 
-def currency_text_input(label, value, key, help_text=None):
+def currency_text_input(label, value, key, help_text=None, disabled=False):
     raw_value = st.text_input(
         label,
         value=f"${float(value):,.0f}",
         key=key,
         help=help_text,
+        disabled=disabled,
     )
     return parse_formatted_number(raw_value, is_percentage=False)
 
 
-def percentage_text_input(label, value, key, decimals=0, help_text=None):
+def percentage_text_input(label, value, key, decimals=0, help_text=None, disabled=False):
     raw_value = st.text_input(
         label,
         value=f"{float(value):.{decimals}%}",
         key=key,
         help=help_text,
+        disabled=disabled,
     )
     return parse_formatted_number(raw_value, is_percentage=True)
 
@@ -689,6 +691,7 @@ defaults = {
     "start_financial_year": 2027,
     "projection_years": 40,
     "retirement_spending_trigger": "Both Retired",
+    "household_mode": "Two People",
     "report_title": "",
     "person1_name": "",
     "person2_name": "",
@@ -777,6 +780,8 @@ person2_name = st.session_state.person2_name
 start_financial_year = int(st.session_state.start_financial_year)
 projection_years = int(st.session_state.projection_years)
 retirement_spending_trigger = st.session_state.retirement_spending_trigger
+household_mode = st.session_state.household_mode
+is_one_person_mode = household_mode == "One Person"
 
 person1_current_age = int(st.session_state.person1_current_age)
 person2_current_age = int(st.session_state.person2_current_age)
@@ -1014,11 +1019,12 @@ if active_input_section == "report":
             t("Person 2 Name (Optional)", "人物 2 姓名（可选）"),
             value=st.session_state.person2_name,
             key="person2_name_input",
+            disabled=is_one_person_mode,
         )
 
 elif active_input_section == "projection":
     st.subheader(t("Projection Timing", "预测时间设置"))
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     with col1:
         start_financial_year = st.number_input(
             t("Start Financial Year", "起始财政年度"),
@@ -1047,6 +1053,13 @@ elif active_input_section == "projection":
             retirement_spending_trigger = "Both Retired"
         else:
             retirement_spending_trigger = "Either Retired"
+    with col4:
+        household_mode = st.selectbox(
+            t("Household Mode", "家庭模式"),
+            options=["One Person", "Two People"],
+            index=0 if st.session_state.household_mode == "One Person" else 1,
+        )
+        is_one_person_mode = household_mode == "One Person"
 
 elif active_input_section == "person1":
     st.subheader(t("Person 1", "人物 1"))
@@ -1102,55 +1115,78 @@ elif active_input_section == "person1":
 
 elif active_input_section == "person2":
     st.subheader(t("Person 2", "人物 2"))
+    if is_one_person_mode:
+        st.info(t("Household Mode is set to One Person. Person 2 inputs are disabled and will be treated as zero inside the model.", "当前为单人模式。Person 2 输入已禁用，模型内部将按 0 处理。"))
     p2a, p2b, p2c = st.columns(3)
     with p2a:
         person2_current_age = st.number_input(
             t("Person 2 Current Age", "人物 2 当前年龄"),
             value=int(st.session_state.person2_current_age),
             step=1,
+            disabled=is_one_person_mode,
         )
         person2_accum_super_balance = currency_text_input(
             t("Person 2 Accumulation Super Balance", "人物 2 累积型养老金余额"),
             st.session_state.person2_accum_super_balance,
             "person2_accum_super_balance_input",
+            disabled=is_one_person_mode,
         )
+        if is_one_person_mode:
+            person2_accum_super_balance = 0.0
         person2_pension_super_balance = currency_text_input(
             t("Person 2 Pension Super Balance", "人物 2 养老金阶段余额"),
             st.session_state.person2_pension_super_balance,
             "person2_pension_super_balance_input",
+            disabled=is_one_person_mode,
         )
+        if is_one_person_mode:
+            person2_pension_super_balance = 0.0
     with p2b:
         person2_retirement_age = st.number_input(
             t("Person 2 Retirement Age", "人物 2 退休年龄"),
             value=int(st.session_state.person2_retirement_age),
             step=1,
+            disabled=is_one_person_mode,
         )
         person2_accum_super_cost_base = currency_text_input(
             t("Person 2 Accumulation Super Cost Base", "人物 2 累积型养老金成本基础"),
             st.session_state.person2_accum_super_cost_base,
             "person2_accum_super_cost_base_input",
+            disabled=is_one_person_mode,
         )
+        if is_one_person_mode:
+            person2_accum_super_cost_base = 0.0
         person2_pension_super_cost_base = currency_text_input(
             t("Person 2 Pension Super Cost Base", "人物 2 养老金阶段成本基础"),
             st.session_state.person2_pension_super_cost_base,
             "person2_pension_super_cost_base_input",
+            disabled=is_one_person_mode,
         )
+        if is_one_person_mode:
+            person2_pension_super_cost_base = 0.0
     with p2c:
         person2_pension_start_age = st.number_input(
             t("Person 2 Pension Start Age", "人物 2 养老金开始年龄"),
             value=int(st.session_state.person2_pension_start_age),
             step=1,
+            disabled=is_one_person_mode,
         )
         person2_transfer_balance_cap = currency_text_input(
             t("Person 2 Transfer Balance Cap", "人物 2 转移余额上限"),
             st.session_state.person2_transfer_balance_cap,
             "person2_transfer_balance_cap_input",
+            disabled=is_one_person_mode,
         )
+        if is_one_person_mode:
+            person2_transfer_balance_cap = 0.0
         person2_annual_income = currency_text_input(
             t("Person 2 Annual Income", "人物 2 年收入"),
             st.session_state.person2_annual_income,
             "person2_annual_income_input",
+            disabled=is_one_person_mode,
         )
+        if is_one_person_mode:
+            person2_annual_income = 0.0
 
 elif active_input_section == "household":
     st.subheader(t("Household", "家庭"))
@@ -1183,17 +1219,33 @@ elif active_input_section == "household":
             st.session_state.retirement_spending,
             "retirement_spending_input",
         )
-        non_super_ownership_person1 = percentage_text_input(
-            t("Person 1 Ownership %", "人物 1 持有比例 %"),
-            st.session_state.non_super_ownership_person1_pct / 100.0,
-            "non_super_ownership_person1_input",
-            decimals=1,
-        ) * 100.0
+        if is_one_person_mode:
+            st.text_input(
+                t("Person 1 Ownership %", "人物 1 持有比例 %"),
+                value="100.0%",
+                disabled=True,
+                key="non_super_ownership_person1_display",
+            )
+            non_super_ownership_person1 = 100.0
+        else:
+            non_super_ownership_person1 = percentage_text_input(
+                t("Person 1 Ownership %", "人物 1 持有比例 %"),
+                st.session_state.non_super_ownership_person1_pct / 100.0,
+                "non_super_ownership_person1_input",
+                decimals=1,
+            ) * 100.0
 
 elif active_input_section == "contributions":
     st.subheader(t("Contribution Schedule", "缴款计划"))
+    contribution_person_options = ["Person 1"] if is_one_person_mode else ["Person 1", "Person 2"]
+
+    contribution_source_df = st.session_state.contribution_events_df.copy()
+    if is_one_person_mode and not contribution_source_df.empty:
+        contribution_source_df = contribution_source_df[contribution_source_df["person"] != "Person 2"].reset_index(drop=True)
+        st.caption(t("Single-person mode automatically ignores any existing Person 2 contribution rows.", "单人模式会自动忽略现有的 Person 2 缴款行。"))
+
     contribution_events_df = st.data_editor(
-        st.session_state.contribution_events_df,
+        contribution_source_df,
         key="contribution_events_editor",
         num_rows="dynamic",
         use_container_width=True,
@@ -1205,7 +1257,7 @@ elif active_input_section == "contributions":
             ),
             "person": st.column_config.SelectboxColumn(
                 t("Person", "人物"),
-                options=["Person 1", "Person 2"],
+                options=contribution_person_options,
             ),
             "contribution_type": st.column_config.SelectboxColumn(
                 t("Contribution Type", "缴款类型"),
@@ -1363,6 +1415,7 @@ elif active_input_section == "simulation":
 st.session_state.start_financial_year = int(start_financial_year)
 st.session_state.projection_years = int(projection_years)
 st.session_state.retirement_spending_trigger = retirement_spending_trigger
+st.session_state.household_mode = household_mode
 st.session_state.report_title = report_title
 st.session_state.person1_name = person1_name
 st.session_state.person2_name = person2_name
@@ -1405,6 +1458,22 @@ st.session_state.number_of_simulations = int(number_of_simulations)
 st.session_state.random_seed = int(random_seed)
 
 
+
+if is_one_person_mode:
+    person2_name = ""
+    person2_current_age = 0
+    person2_retirement_age = 0
+    person2_pension_start_age = 0
+    person2_accum_super_balance = 0.0
+    person2_pension_super_balance = 0.0
+    person2_accum_super_cost_base = 0.0
+    person2_pension_super_cost_base = 0.0
+    person2_transfer_balance_cap = 0.0
+    person2_annual_income = 0.0
+    non_super_ownership_person1 = 100.0
+    if not contribution_events_df.empty:
+        contribution_events_df = contribution_events_df[contribution_events_df["person"] != "Person 2"].reset_index(drop=True)
+
 # ============================================================
 # SECTION: BASE INPUT MAP
 # ============================================================
@@ -1416,6 +1485,7 @@ base_inputs = {
     "start_financial_year": int(start_financial_year),
     "projection_years": int(projection_years),
     "retirement_spending_trigger": retirement_spending_trigger,
+    "household_mode": household_mode,
     "person1_current_age": int(person1_current_age),
     "person2_current_age": int(person2_current_age),
     "person1_retirement_age": int(person1_retirement_age),

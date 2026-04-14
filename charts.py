@@ -14,33 +14,71 @@ def _person_label(inputs, key, fallback):
 
 def _add_lifecycle_markers(fig, inputs):
     start_fy_end = int(str(inputs["start_financial_year"]).replace("FY", ""))
+    household_mode = str(inputs.get("household_mode", "Two People"))
+    one_person_mode = household_mode == "One Person"
 
     p1_retirement_fy = start_fy_end + (inputs["person1_retirement_age"] - inputs["person1_current_age"])
-    p2_retirement_fy = start_fy_end + (inputs["person2_retirement_age"] - inputs["person2_current_age"])
     p1_pension_fy = start_fy_end + (inputs["person1_pension_start_age"] - inputs["person1_current_age"])
-    p2_pension_fy = start_fy_end + (inputs["person2_pension_start_age"] - inputs["person2_current_age"])
 
     p1_label = _person_label(inputs, "person1_name", "P1")
     p2_label = _person_label(inputs, "person2_name", "P2")
 
     markers = [
-        (p1_retirement_fy, f"{p1_label} Retirement"),
-        (p2_retirement_fy, f"{p2_label} Retirement"),
-        (p1_pension_fy, f"{p1_label} Pension Start"),
-        (p2_pension_fy, f"{p2_label} Pension Start"),
+        {"x": p1_retirement_fy, "label": f"{p1_label} Retirement"},
+        {"x": p1_pension_fy, "label": f"{p1_label} Pension Start"},
     ]
 
+    if not one_person_mode:
+        p2_retirement_fy = start_fy_end + (inputs["person2_retirement_age"] - inputs["person2_current_age"])
+        p2_pension_fy = start_fy_end + (inputs["person2_pension_start_age"] - inputs["person2_current_age"])
+        markers.extend(
+            [
+                {"x": p2_retirement_fy, "label": f"{p2_label} Retirement"},
+                {"x": p2_pension_fy, "label": f"{p2_label} Pension Start"},
+            ]
+        )
+
+    deduped = []
     seen = set()
-    for x_value, label in markers:
-        dedupe_key = (x_value, label)
+    for marker in markers:
+        dedupe_key = (marker["x"], marker["label"])
         if dedupe_key in seen:
             continue
         seen.add(dedupe_key)
+        deduped.append(marker)
+
+    counts_by_year = {}
+    for marker in deduped:
+        counts_by_year[marker["x"]] = counts_by_year.get(marker["x"], 0) + 1
+
+    used_index_by_year = {}
+    annotation_positions = ["top left", "top right", "bottom left", "bottom right"]
+
+    for marker in deduped:
+        x_value = marker["x"]
+        label = marker["label"]
+        year_index = used_index_by_year.get(x_value, 0)
+        used_index_by_year[x_value] = year_index + 1
+
+        annotation_position = annotation_positions[year_index % len(annotation_positions)]
+        ay = -40 - (year_index * 18) if "top" in annotation_position else 40 + (year_index * 18)
+
         fig.add_vline(
             x=x_value,
             line_dash="dash",
             annotation_text=label,
-            annotation_position="top",
+            annotation_position=annotation_position,
+            annotation_y=1.0,
+            annotation_yref="paper",
+            annotation=dict(
+                yshift=0,
+                ay=ay,
+                bgcolor="rgba(255,255,255,0.85)",
+                bordercolor="rgba(0,0,0,0.15)",
+                borderwidth=1,
+                borderpad=2,
+                font=dict(size=11),
+            ),
         )
 
     return fig
