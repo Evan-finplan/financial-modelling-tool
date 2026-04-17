@@ -14,71 +14,33 @@ def _person_label(inputs, key, fallback):
 
 def _add_lifecycle_markers(fig, inputs):
     start_fy_end = int(str(inputs["start_financial_year"]).replace("FY", ""))
-    household_mode = str(inputs.get("household_mode", "Two People"))
-    one_person_mode = household_mode == "One Person"
 
     p1_retirement_fy = start_fy_end + (inputs["person1_retirement_age"] - inputs["person1_current_age"])
+    p2_retirement_fy = start_fy_end + (inputs["person2_retirement_age"] - inputs["person2_current_age"])
     p1_pension_fy = start_fy_end + (inputs["person1_pension_start_age"] - inputs["person1_current_age"])
+    p2_pension_fy = start_fy_end + (inputs["person2_pension_start_age"] - inputs["person2_current_age"])
 
     p1_label = _person_label(inputs, "person1_name", "P1")
     p2_label = _person_label(inputs, "person2_name", "P2")
 
     markers = [
-        {"x": p1_retirement_fy, "label": f"{p1_label} Retirement"},
-        {"x": p1_pension_fy, "label": f"{p1_label} Pension Start"},
+        (p1_retirement_fy, f"{p1_label} Retirement"),
+        (p2_retirement_fy, f"{p2_label} Retirement"),
+        (p1_pension_fy, f"{p1_label} Pension Start"),
+        (p2_pension_fy, f"{p2_label} Pension Start"),
     ]
 
-    if not one_person_mode:
-        p2_retirement_fy = start_fy_end + (inputs["person2_retirement_age"] - inputs["person2_current_age"])
-        p2_pension_fy = start_fy_end + (inputs["person2_pension_start_age"] - inputs["person2_current_age"])
-        markers.extend(
-            [
-                {"x": p2_retirement_fy, "label": f"{p2_label} Retirement"},
-                {"x": p2_pension_fy, "label": f"{p2_label} Pension Start"},
-            ]
-        )
-
-    deduped = []
     seen = set()
-    for marker in markers:
-        dedupe_key = (marker["x"], marker["label"])
+    for x_value, label in markers:
+        dedupe_key = (x_value, label)
         if dedupe_key in seen:
             continue
         seen.add(dedupe_key)
-        deduped.append(marker)
-
-    counts_by_year = {}
-    for marker in deduped:
-        counts_by_year[marker["x"]] = counts_by_year.get(marker["x"], 0) + 1
-
-    used_index_by_year = {}
-    annotation_positions = ["top left", "top right", "bottom left", "bottom right"]
-
-    for marker in deduped:
-        x_value = marker["x"]
-        label = marker["label"]
-        year_index = used_index_by_year.get(x_value, 0)
-        used_index_by_year[x_value] = year_index + 1
-
-        annotation_position = annotation_positions[year_index % len(annotation_positions)]
-        ay = -40 - (year_index * 18) if "top" in annotation_position else 40 + (year_index * 18)
-
         fig.add_vline(
             x=x_value,
             line_dash="dash",
             annotation_text=label,
-            annotation_position=annotation_position,
-            annotation_y=1.0,
-            annotation_yref="paper",
-            annotation=dict(
-                yshift=0,
-                ay=ay,
-                bgcolor="rgba(255,255,255,0.85)",
-                bordercolor="rgba(0,0,0,0.15)",
-                borderwidth=1,
-                borderpad=2,
-                font=dict(size=11),
-            ),
+            annotation_position="top",
         )
 
     return fig
@@ -200,20 +162,26 @@ def create_failure_probability_chart(failure_prob_df, inputs, title_text):
 # ============================================================
 
 def create_tax_breakdown_chart(det_df, inputs, title_text):
+    one_person_mode = str(inputs.get("household_mode", "Two People")) == "One Person"
+
     tax_columns = [
         "person1_income_tax",
         "person1_medicare_levy",
         "person1_income_tax_on_non_super_earnings",
         "person1_medicare_levy_on_non_super_earnings",
-        "person2_income_tax",
-        "person2_medicare_levy",
-        "person2_income_tax_on_non_super_earnings",
-        "person2_medicare_levy_on_non_super_earnings",
         "person1_super_contributions_tax",
-        "person2_super_contributions_tax",
         "person1_total_super_earnings_tax",
-        "person2_total_super_earnings_tax",
     ]
+
+    if not one_person_mode:
+        tax_columns.extend([
+            "person2_income_tax",
+            "person2_medicare_levy",
+            "person2_income_tax_on_non_super_earnings",
+            "person2_medicare_levy_on_non_super_earnings",
+            "person2_super_contributions_tax",
+            "person2_total_super_earnings_tax",
+        ])
 
     pretty_names = {
         "person1_income_tax": "P1 Salary Income Tax",
@@ -263,19 +231,26 @@ def create_tax_breakdown_chart(det_df, inputs, title_text):
 
 def create_income_vs_spending_chart(det_df, inputs, title_text):
     fig = go.Figure()
+    one_person_mode = str(inputs.get("household_mode", "Two People")) == "One Person"
 
     series = [
         ("person1_gross_income", "P1 Gross Income"),
         ("person1_net_income", "P1 Net Income"),
-        ("person2_gross_income", "P2 Gross Income"),
-        ("person2_net_income", "P2 Net Income"),
         ("taxable_non_super_earnings_p1", "P1 Taxable Non-Super Income Return"),
-        ("taxable_non_super_earnings_p2", "P2 Taxable Non-Super Income Return"),
         ("person1_min_pension_drawdown", "P1 Minimum Pension Drawdown"),
-        ("person2_min_pension_drawdown", "P2 Minimum Pension Drawdown"),
         ("spending", "Household Spending"),
         ("surplus_cash_to_non_super", "Surplus Cash to Non-Super"),
     ]
+
+    if not one_person_mode:
+        series[2:2] = [
+            ("person2_gross_income", "P2 Gross Income"),
+            ("person2_net_income", "P2 Net Income"),
+        ]
+        series.extend([
+            ("taxable_non_super_earnings_p2", "P2 Taxable Non-Super Income Return"),
+            ("person2_min_pension_drawdown", "P2 Minimum Pension Drawdown"),
+        ])
 
     for column, label in series:
         if column in det_df.columns:

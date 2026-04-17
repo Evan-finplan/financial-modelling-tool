@@ -136,50 +136,11 @@ def get_tax_schedule_key_for_financial_year(financial_year_end):
     return "2028_PLUS"
 
 
-
-
-# ============================================================
-# SECTION: HOUSEHOLD MODE HELPERS
-# ============================================================
-
-def is_one_person_mode(inputs):
-    return str(inputs.get("household_mode", "Two People")) == "One Person"
-
-
-def normalise_household_inputs(inputs):
-    normalized = copy.deepcopy(inputs)
-
-    household_mode = str(normalized.get("household_mode", "Two People"))
-    normalized["household_mode"] = household_mode
-
-    if household_mode == "One Person":
-        normalized["person2_name"] = ""
-        normalized["person2_current_age"] = 0
-        normalized["person2_retirement_age"] = 0
-        normalized["person2_pension_start_age"] = 0
-
-        normalized["person2_accum_super_balance"] = 0.0
-        normalized["person2_pension_super_balance"] = 0.0
-        normalized["person2_accum_super_cost_base"] = 0.0
-        normalized["person2_pension_super_cost_base"] = 0.0
-        normalized["person2_transfer_balance_cap"] = 0.0
-        normalized["person2_annual_income"] = 0.0
-
-        normalized["non_super_ownership_person1"] = 1.0
-
-        events_df = normalise_contribution_events(
-            normalized.get("contribution_events", []),
-            household_mode=household_mode,
-        )
-        normalized["contribution_events"] = events_df.to_dict(orient="records")
-
-    return normalized
-
 # ============================================================
 # SECTION: CONTRIBUTION EVENT HELPERS
 # ============================================================
 
-def normalise_contribution_events(contribution_events, household_mode="Two People"):
+def normalise_contribution_events(contribution_events):
     if contribution_events is None:
         return pd.DataFrame(columns=["financial_year", "person", "contribution_type", "amount"])
 
@@ -203,15 +164,11 @@ def normalise_contribution_events(contribution_events, household_mode="Two Peopl
     df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0.0)
 
     df = df[df["amount"] != 0].copy()
-
-    if str(household_mode) == "One Person":
-        df = df[df["person"] != "Person 2"].copy()
-
     return df.reset_index(drop=True)
 
 
-def build_contribution_event_lookup(contribution_events, household_mode="Two People"):
-    df = normalise_contribution_events(contribution_events, household_mode=household_mode)
+def build_contribution_event_lookup(contribution_events):
+    df = normalise_contribution_events(contribution_events)
 
     if df.empty:
         return {}
@@ -289,7 +246,6 @@ def should_use_retirement_spending(
 
 def build_projection_context(inputs):
     year_rows = []
-    one_person_mode = is_one_person_mode(inputs)
 
     for year_index in range(int(inputs["projection_years"])):
         financial_year_end = get_financial_year_end(inputs["start_financial_year"], year_index)
@@ -297,22 +253,16 @@ def build_projection_context(inputs):
         tax_schedule_key = get_tax_schedule_key_for_financial_year(financial_year_end)
 
         person1_age = get_person_age(inputs["person1_current_age"], year_index)
+        person2_age = get_person_age(inputs["person2_current_age"], year_index)
 
-        if one_person_mode:
-            person2_age = 0
-        else:
-            person2_age = get_person_age(inputs["person2_current_age"], year_index)
-
+        # ---------- NEW: decoupled logic ----------
         person1_is_working = person1_age < inputs["person1_retirement_age"]
+        person2_is_working = person2_age < inputs["person2_retirement_age"]
+
         person1_is_pension_phase = person1_age >= inputs["person1_pension_start_age"]
+        person2_is_pension_phase = person2_age >= inputs["person2_pension_start_age"]
 
-        if one_person_mode:
-            person2_is_working = False
-            person2_is_pension_phase = False
-        else:
-            person2_is_working = person2_age < inputs["person2_retirement_age"]
-            person2_is_pension_phase = person2_age >= inputs["person2_pension_start_age"]
-
+        # ---------- phase label (for display only) ----------
         def get_phase(is_working, is_pension):
             if is_working and is_pension:
                 return "working_pension"
@@ -326,29 +276,23 @@ def build_projection_context(inputs):
         person1_phase = get_phase(person1_is_working, person1_is_pension_phase)
         person2_phase = get_phase(person2_is_working, person2_is_pension_phase)
 
+        # ---------- income only depends on working ----------
         person1_income_indexed = (
             inputs["person1_annual_income"] * ((1 + inputs["inflation_rate"]) ** year_index)
             if person1_is_working else 0.0
         )
 
-        if one_person_mode:
-            person2_income_indexed = 0.0
-        else:
-            person2_income_indexed = (
-                inputs["person2_annual_income"] * ((1 + inputs["inflation_rate"]) ** year_index)
-                if person2_is_working else 0.0
-            )
+        person2_income_indexed = (
+            inputs["person2_annual_income"] * ((1 + inputs["inflation_rate"]) ** year_index)
+            if person2_is_working else 0.0
+        )
 
         use_retirement_spending = should_use_retirement_spending(
             person1_age=person1_age,
             person2_age=person2_age,
             person1_retirement_age=inputs["person1_retirement_age"],
-            person2_retirement_age=(999 if one_person_mode else inputs["person2_retirement_age"]),
+            person2_retirement_age=inputs["person2_retirement_age"],
             retirement_spending_trigger=inputs["retirement_spending_trigger"],
-        )
-
-        indexed_retirement_spending = (
-            inputs["retirement_spending"] * ((1 + inputs["inflation_rate"]) ** year_index)
         )
 
         year_rows.append(
@@ -357,7 +301,6 @@ def build_projection_context(inputs):
                 "financial_year_end": financial_year_end,
                 "financial_year_label": financial_year_label,
                 "tax_schedule_key": tax_schedule_key,
-        "household_mode": inputs.get("household_mode", "Two People"),
 
                 "person1_age": person1_age,
                 "person2_age": person2_age,
@@ -365,6 +308,7 @@ def build_projection_context(inputs):
                 "person1_phase": person1_phase,
                 "person2_phase": person2_phase,
 
+                # ✅ 新增关键字段
                 "person1_is_working": person1_is_working,
                 "person2_is_working": person2_is_working,
                 "person1_is_pension_phase": person1_is_pension_phase,
@@ -374,7 +318,6 @@ def build_projection_context(inputs):
                 "person2_income_indexed": person2_income_indexed,
 
                 "use_retirement_spending": use_retirement_spending,
-                "indexed_retirement_spending": indexed_retirement_spending,
             }
         )
 
@@ -594,15 +537,21 @@ def allocate_household_extra_super_withdrawal(
 def calculate_super_account_earnings_tax(accum_balance_before_return, pension_balance_before_return, return_rate, transfer_balance_cap):
     accum_balance_before_return = float(accum_balance_before_return)
     pension_balance_before_return = float(pension_balance_before_return)
+    transfer_balance_cap = max(float(transfer_balance_cap), 0.0)
 
     accum_earnings = accum_balance_before_return * return_rate
     pension_earnings = pension_balance_before_return * return_rate
 
     accum_tax = max(accum_earnings, 0.0) * SUPER_EARNINGS_TAX_RATE
 
-    # Pension earnings are fully tax free in this model version,
-    # including any amount notionally above TBC.
-    pension_tax = 0.0
+    if pension_balance_before_return <= 0 or pension_earnings <= 0:
+        pension_tax = 0.0
+    else:
+        exempt_pension_balance = min(pension_balance_before_return, transfer_balance_cap)
+        excess_pension_balance = max(pension_balance_before_return - transfer_balance_cap, 0.0)
+        excess_ratio = excess_pension_balance / pension_balance_before_return if pension_balance_before_return > 0 else 0.0
+        taxable_pension_earnings = pension_earnings * excess_ratio
+        pension_tax = max(taxable_pension_earnings, 0.0) * SUPER_EARNINGS_TAX_RATE
 
     return {
         "accum_earnings": accum_earnings,
@@ -661,6 +610,8 @@ def calculate_super_withdrawal_cgt(
     withdrawal_amount = max(float(withdrawal_amount), 0.0)
     account_balance = max(float(account_balance), 0.0)
     account_cost_base = max(float(account_cost_base), 0.0)
+    transfer_balance_cap = max(float(transfer_balance_cap), 0.0)
+    phase_balance_for_tax = max(float(phase_balance_for_tax), 0.0)
 
     sale_result = calculate_average_cost_cgt_on_sale(
         sale_proceeds=withdrawal_amount,
@@ -669,13 +620,17 @@ def calculate_super_withdrawal_cgt(
         cgt_discount_rate=cgt_discount_rate,
     )
 
-    # Pension withdrawals are fully tax free in this model version.
+    taxable_ratio = 1.0
+
     if phase == "pension_phase":
-        taxable_discounted_capital_gain = 0.0
-        cgt_tax_paid = 0.0
-    else:
-        taxable_discounted_capital_gain = sale_result["discounted_taxable_capital_gain"]
-        cgt_tax_paid = taxable_discounted_capital_gain * SUPER_CGT_TAX_RATE
+        if phase_balance_for_tax <= 0:
+            taxable_ratio = 0.0
+        else:
+            excess_balance = max(phase_balance_for_tax - transfer_balance_cap, 0.0)
+            taxable_ratio = excess_balance / phase_balance_for_tax if phase_balance_for_tax > 0 else 0.0
+
+    taxable_discounted_capital_gain = sale_result["discounted_taxable_capital_gain"] * taxable_ratio
+    cgt_tax_paid = taxable_discounted_capital_gain * SUPER_CGT_TAX_RATE
 
     return {
         "withdrawal_amount": withdrawal_amount,
@@ -694,7 +649,6 @@ def calculate_super_withdrawal_cgt(
 # ============================================================
 
 def validate_inputs(inputs):
-    inputs = normalise_household_inputs(inputs)
     errors = []
 
     numeric_non_negative_fields = [
@@ -734,6 +688,7 @@ def validate_inputs(inputs):
 
     if inputs["number_of_simulations"] <= 0:
         errors.append("number_of_simulations must be greater than 0.")
+
 
     if inputs["super_income_return_mean"] <= -1:
         errors.append("Super Income Return Mean must be greater than -1.00.")
@@ -779,13 +734,7 @@ def validate_inputs(inputs):
     except Exception:
         errors.append("start_financial_year must be a financial year end such as 2027.")
 
-    if str(inputs.get("household_mode", "Two People")) not in ["One Person", "Two People"]:
-        errors.append("household_mode must be either 'One Person' or 'Two People'.")
-
-    events_df = normalise_contribution_events(
-        inputs.get("contribution_events"),
-        household_mode=inputs.get("household_mode", "Two People"),
-    )
+    events_df = normalise_contribution_events(inputs.get("contribution_events"), household_mode=inputs.get("household_mode", "Two People"))
     valid_people = {"Person 1", "Person 2"}
     valid_types = {"personal_deductible", "non_concessional"}
 
@@ -847,7 +796,7 @@ def generate_input_warnings(inputs):
     warnings.append("Pension transfer is triggered from pension start age and is applied up to the person's transfer balance cap. Minimum pension drawdown is then applied from pension assets.")
     warnings.append("Personal deductible contributions reduce taxable income and also flow through concessional contribution tax inside super.")
 
-    events_df = normalise_contribution_events(inputs.get("contribution_events"))
+    events_df = normalise_contribution_events(inputs.get("contribution_events"), household_mode=inputs.get("household_mode", "Two People"))
     if not events_df.empty:
         start_fy = parse_financial_year_label(inputs["start_financial_year"])
 
@@ -1689,27 +1638,29 @@ def run_one_year(
         0.0,
     )
 
-    # Cost base only changes through transfers, withdrawals, and new net contributions / new cash added.
-    # It must not increase merely because market value grows.
     ending_person1_accum_super_cost_base = max(
-        cashflow["person1_accum_cost_base_before_return"],
+        cashflow["person1_accum_cost_base_before_return"]
+        + max(person1_accum_capital_earnings, 0.0),
         0.0,
     )
     ending_person1_pension_super_cost_base = max(
-        cashflow["person1_pension_cost_base_before_return"],
+        cashflow["person1_pension_cost_base_before_return"]
+        + max(person1_pension_capital_earnings, 0.0),
         0.0,
     )
     ending_person2_accum_super_cost_base = max(
-        cashflow["person2_accum_cost_base_before_return"],
+        cashflow["person2_accum_cost_base_before_return"]
+        + max(person2_accum_capital_earnings, 0.0),
         0.0,
     )
     ending_person2_pension_super_cost_base = max(
-        cashflow["person2_pension_cost_base_before_return"],
+        cashflow["person2_pension_cost_base_before_return"]
+        + max(person2_pension_capital_earnings, 0.0),
         0.0,
     )
-    ending_non_super_cost_base = max(
-        cashflow["non_super_cost_base_before_return"],
-        0.0,
+    ending_non_super_cost_base = (
+        cashflow["non_super_cost_base_before_return"]
+        + max(non_super_capital_earnings, 0.0)
     )
 
     total_super_balance = (
@@ -1912,13 +1863,9 @@ def run_one_year(
 # ============================================================
 
 def run_deterministic_projection(inputs):
-    inputs = normalise_household_inputs(inputs)
     projection_years = int(inputs["projection_years"])
     projection_context = build_projection_context(inputs)
-    contribution_event_lookup = build_contribution_event_lookup(
-        inputs.get("contribution_events"),
-        household_mode=inputs.get("household_mode", "Two People"),
-    )
+    contribution_event_lookup = build_contribution_event_lookup(inputs.get("contribution_events"))
 
     current_person1_accum_super_balance = inputs["person1_accum_super_balance"]
     current_person1_pension_super_balance = inputs["person1_pension_super_balance"]
@@ -1940,10 +1887,8 @@ def run_deterministic_projection(inputs):
     results = []
 
     for year_context in projection_context["year_rows"]:
-        indexed_retirement_spending = year_context["indexed_retirement_spending"]
-
         if year_context["use_retirement_spending"]:
-            current_spending = max(current_spending, indexed_retirement_spending)
+            current_spending = max(current_spending, inputs["retirement_spending"])
 
         result = run_one_year(
             inputs=inputs,
@@ -1988,10 +1933,9 @@ def run_deterministic_projection(inputs):
 
         if year_context["year_index"] < projection_years - 1:
             next_year_context = projection_context["year_rows"][year_context["year_index"] + 1]
-            next_indexed_retirement_spending = next_year_context["indexed_retirement_spending"]
 
             if next_year_context["use_retirement_spending"]:
-                current_spending = max(current_spending * (1 + inputs["inflation_rate"]), next_indexed_retirement_spending)
+                current_spending = inputs["retirement_spending"]
             else:
                 current_spending = current_spending * (1 + inputs["inflation_rate"])
 
@@ -2003,8 +1947,6 @@ def run_deterministic_projection(inputs):
 # ============================================================
 
 def run_single_simulation(inputs, rng, contribution_event_lookup, projection_context, simulation_id):
-    inputs = normalise_household_inputs(inputs)
-
     current_person1_accum_super_balance = inputs["person1_accum_super_balance"]
     current_person1_pension_super_balance = inputs["person1_pension_super_balance"]
     current_person2_accum_super_balance = inputs["person2_accum_super_balance"]
@@ -2027,10 +1969,8 @@ def run_single_simulation(inputs, rng, contribution_event_lookup, projection_con
     final_wealth = None
 
     for year_context in projection_context["year_rows"]:
-        indexed_retirement_spending = year_context["indexed_retirement_spending"]
-
         if year_context["use_retirement_spending"]:
-            current_spending = max(current_spending, indexed_retirement_spending)
+            current_spending = max(current_spending, inputs["retirement_spending"])
 
         result = run_one_year(
             inputs=inputs,
@@ -2092,10 +2032,9 @@ def run_single_simulation(inputs, rng, contribution_event_lookup, projection_con
 
         if year_context["year_index"] < int(inputs["projection_years"]) - 1:
             next_year_context = projection_context["year_rows"][year_context["year_index"] + 1]
-            next_indexed_retirement_spending = next_year_context["indexed_retirement_spending"]
 
             if next_year_context["use_retirement_spending"]:
-                current_spending = max(current_spending * (1 + inputs["inflation_rate"]), next_indexed_retirement_spending)
+                current_spending = inputs["retirement_spending"]
             else:
                 current_spending = current_spending * (1 + inputs["inflation_rate"])
 
@@ -2107,13 +2046,9 @@ def run_single_simulation(inputs, rng, contribution_event_lookup, projection_con
 
 
 def run_monte_carlo(inputs, random_seed=42):
-    inputs = normalise_household_inputs(inputs)
     rng = np.random.default_rng(random_seed)
     n_sims = int(inputs["number_of_simulations"])
-    contribution_event_lookup = build_contribution_event_lookup(
-        inputs.get("contribution_events"),
-        household_mode=inputs.get("household_mode", "Two People"),
-    )
+    contribution_event_lookup = build_contribution_event_lookup(inputs.get("contribution_events"))
     projection_context = build_projection_context(inputs)
 
     simulation_summaries = []

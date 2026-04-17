@@ -5,6 +5,7 @@ import re
 from datetime import datetime
 
 import pandas as pd
+import plotly.express as px
 import streamlit as st
 
 from charts import (
@@ -106,24 +107,22 @@ def parse_formatted_number(value, is_percentage=False):
     return number / 100.0 if is_percentage else number
 
 
-def currency_text_input(label, value, key, help_text=None, disabled=False):
+def currency_text_input(label, value, key, help_text=None):
     raw_value = st.text_input(
         label,
         value=f"${float(value):,.0f}",
         key=key,
         help=help_text,
-        disabled=disabled,
     )
     return parse_formatted_number(raw_value, is_percentage=False)
 
 
-def percentage_text_input(label, value, key, decimals=0, help_text=None, disabled=False):
+def percentage_text_input(label, value, key, decimals=0, help_text=None):
     raw_value = st.text_input(
         label,
         value=f"{float(value):.{decimals}%}",
         key=key,
         help=help_text,
-        disabled=disabled,
     )
     return parse_formatted_number(raw_value, is_percentage=True)
 
@@ -132,8 +131,8 @@ def percentage_text_input(label, value, key, decimals=0, help_text=None, disable
 # SECTION: CONTRIBUTION EVENT HELPERS
 # ============================================================
 
-def contribution_events_to_records(events_df, household_mode="Two People"):
-    clean_df = normalise_contribution_events(events_df, household_mode=household_mode)
+def contribution_events_to_records(events_df):
+    clean_df = normalise_contribution_events(events_df)
     if clean_df.empty:
         return []
     return clean_df.to_dict(orient="records")
@@ -605,12 +604,261 @@ def build_current_result_bundle_from_session_state():
 
 def get_active_result_bundle():
     active_name = st.session_state.get("active_result_set_name", "Current Results")
-
     if active_name == "Current Results":
         return build_current_result_bundle_from_session_state()
+    return st.session_state.get("saved_result_sets", {}).get(active_name)
 
-    saved_sets = st.session_state.get("saved_result_sets", {})
-    return saved_sets.get(active_name)
+
+def save_current_results_snapshot(snapshot_name):
+    current_bundle = build_current_result_bundle_from_session_state()
+    if current_bundle is None:
+        return False, t("There are no current results to save yet.", "当前还没有可保存的结果。")
+
+    snapshot_name = str(snapshot_name or "").strip()
+    if not snapshot_name:
+        return False, t("Please enter a name for the saved results.", "请先输入保存结果的名称。")
+
+    saved_sets = copy.deepcopy(st.session_state.get("saved_result_sets", {}))
+    saved_sets[snapshot_name] = current_bundle
+    st.session_state.saved_result_sets = saved_sets
+    st.session_state.active_result_set_name = snapshot_name
+    return True, t(f"Saved results as: {snapshot_name}", f"已保存结果：{snapshot_name}")
+
+
+def rename_saved_results_snapshot(old_name, new_name):
+    old_name = str(old_name or "").strip()
+    new_name = str(new_name or "").strip()
+    if old_name in {"", "Current Results"}:
+        return False, t("Select a saved result to rename.", "请选择一个已保存结果进行重命名。")
+    if not new_name:
+        return False, t("Please enter a new name.", "请输入新名称。")
+
+    saved_sets = copy.deepcopy(st.session_state.get("saved_result_sets", {}))
+    if old_name not in saved_sets:
+        return False, t("The selected saved result no longer exists.", "所选已保存结果不存在。")
+    if new_name != old_name and new_name in saved_sets:
+        return False, t("That result name already exists.", "该结果名称已存在。")
+
+    saved_sets[new_name] = saved_sets.pop(old_name)
+    st.session_state.saved_result_sets = saved_sets
+    if st.session_state.get("active_result_set_name") == old_name:
+        st.session_state.active_result_set_name = new_name
+    return True, t(f"Renamed to: {new_name}", f"已重命名为：{new_name}")
+
+
+def _discount_factor_for_year(inputs, financial_year_end):
+    start_fy = int(inputs["start_financial_year"])
+    year_index = max(int(financial_year_end) - start_fy, 0)
+    return (1 + float(inputs.get("inflation_rate", 0.0))) ** year_index
+
+
+def _is_currency_like_column(col_name):
+    lowered = str(col_name).lower()
+    if lowered in {
+        "year", "financial_year_end", "person1_age", "person2_age", "year_index",
+        "simulation_id", "failed_by_year_count", "total_simulations",
+    }:
+        return False
+    if lowered.endswith("_rate") or lowered.endswith("_probability"):
+        return False
+    if "age" in lowered:
+        return False
+    if "success_rate" in lowered:
+        return False
+    if "probability" in lowered:
+        return False
+    if lowered.startswith("p") and lowered[1:].isdigit():
+        return True
+    currency_tokens = [
+        "wealth", "balance", "income", "spending", "expenses", "expense", "tax", "cgt",
+        "withdrawal", "drawdown", "earnings", "contribution", "cost_base", "cost base",
+        "cash", "amount", "cap space", "transfer", "surplus", "shortfall", "value",
+        "gain", "loss", "accum", "pension",
+    ]
+    return any(token in lowered for token in currency_tokens)
+
+
+def convert_det_df_for_value_mode(det_df, inputs, value_mode):
+    df = det_df.copy()
+    if value_mode == "Future Value" or df.empty:
+        return df
+    if "financial_year_end" not in df.columns:
+        return df
+
+    discount_factors = df["financial_year_end"].apply(lambda fy: _discount_factor_for_year(inputs, fy))
+    for col in df.columns:
+        if col == "financial_year_end":
+            continue
+        if pd.api.types.is_bool_dtype(df[col]):
+            continue
+        if not pd.api.types.is_numeric_dtype(df[col]):
+            continue
+        if _is_currency_like_column(col):
+            df[col] = df[col] / discount_factors
+    return df
+
+
+def convert_percentile_df_for_value_mode(percentile_df, inputs, value_mode):
+    df = percentile_df.copy()
+    if value_mode == "Future Value" or df.empty or "financial_year_end" not in df.columns:
+        return df
+    discount_factors = df["financial_year_end"].apply(lambda fy: _discount_factor_for_year(inputs, fy))
+    for col in ["p10", "p50", "p90"]:
+        if col in df.columns:
+            df[col] = df[col] / discount_factors
+    return df
+
+
+def convert_summary_df_for_value_mode(summary_df, inputs, value_mode):
+    df = summary_df.copy()
+    if value_mode == "Future Value" or df.empty or "final_wealth" not in df.columns:
+        return df
+    projection_horizon_end = int(inputs["start_financial_year"]) + int(inputs["projection_years"]) - 1
+    discount_factor = _discount_factor_for_year(inputs, projection_horizon_end)
+    df["final_wealth"] = df["final_wealth"] / discount_factor
+    return df
+
+
+def convert_comparison_df_for_value_mode(comparison_df, selected_result_inputs, value_mode):
+    df = comparison_df.copy()
+    if value_mode == "Future Value" or df.empty:
+        return df
+    projection_horizon_end = int(selected_result_inputs["start_financial_year"]) + int(selected_result_inputs["projection_years"]) - 1
+    discount_factor = _discount_factor_for_year(selected_result_inputs, projection_horizon_end)
+    for col in ["median_final_wealth", "p10_final_wealth", "p90_final_wealth"]:
+        if col in df.columns:
+            df[col] = df[col] / discount_factor
+    return format_comparison_df(df)
+
+
+def display_value_label(value_mode):
+    return t("Present Value", "现值") if value_mode == "Present Value" else t("Future Value", "终值")
+
+
+def render_live_input_feedback(base_inputs):
+    validation_errors = validate_inputs(base_inputs)
+    input_warnings = generate_input_warnings(base_inputs)
+
+    if validation_errors:
+        st.error(t("Live input validation found issues.", "即时输入检查发现问题。"))
+        for err in validation_errors[:8]:
+            st.error(err)
+
+    high_risk_messages = []
+    if base_inputs["inflation_rate"] > 0.08:
+        high_risk_messages.append(t("⚠️ High inflation assumption", "⚠️ 通胀假设偏高"))
+    if base_inputs["super_capital_return_std"] >= 0.18 or base_inputs["non_super_capital_return_std"] >= 0.18:
+        high_risk_messages.append(t("⚠️ High volatility assumptions", "⚠️ 波动率假设偏高"))
+    if base_inputs["person1_retirement_age"] < 55 or (base_inputs["household_mode"] == "Two People" and base_inputs["person2_retirement_age"] < 55):
+        high_risk_messages.append(t("⚠️ Early retirement age", "⚠️ 退休年龄偏早"))
+    if base_inputs["number_of_simulations"] < 1000:
+        high_risk_messages.append(t("⚠️ Low simulation count", "⚠️ 模拟次数偏低"))
+    if base_inputs["non_super_cost_base"] > base_inputs["non_super_balance"]:
+        high_risk_messages.append(t("⚠️ Non-super cost base exceeds balance", "⚠️ 非养老金成本基础高于余额"))
+
+    if high_risk_messages:
+        st.markdown("  ".join([f"`{msg}`" for msg in high_risk_messages]))
+
+    if input_warnings and not validation_errors:
+        with st.expander(t("Live Input Warnings", "即时输入提示"), expanded=False):
+            for msg in input_warnings[:8]:
+                st.warning(msg)
+
+
+def render_saved_result_comparison_section(saved_result_sets, value_mode):
+    if len(saved_result_sets) < 2:
+        return
+
+    st.subheader(t("Compare Two Saved Results", "比较两个已保存结果"))
+
+    saved_names = list(saved_result_sets.keys())
+    compare_col1, compare_col2 = st.columns(2)
+    with compare_col1:
+        left_name = st.selectbox(
+            t("Saved Result A", "已保存结果 A"),
+            options=saved_names,
+            key="saved_compare_left",
+        )
+    with compare_col2:
+        right_default_index = 1 if len(saved_names) > 1 else 0
+        right_name = st.selectbox(
+            t("Saved Result B", "已保存结果 B"),
+            options=saved_names,
+            index=right_default_index,
+            key="saved_compare_right",
+        )
+
+    if left_name == right_name:
+        st.info(t("Choose two different saved results to compare.", "请选择两个不同的已保存结果进行比较。"))
+        return
+
+    left_bundle = saved_result_sets[left_name]
+    right_bundle = saved_result_sets[right_name]
+
+    left_results = left_bundle.get("comparison_results", {})
+    right_results = right_bundle.get("comparison_results", {})
+    if not left_results or not right_results:
+        st.info(t("One of the saved results does not contain comparison data.", "其中一个已保存结果不包含比较数据。"))
+        return
+
+    left_scenario_name = list(left_results.keys())[0]
+    right_scenario_name = list(right_results.keys())[0]
+    left_result = left_results[left_scenario_name]
+    right_result = right_results[right_scenario_name]
+
+    left_summary_df = convert_summary_df_for_value_mode(left_result["summary_df"], left_result["inputs"], value_mode)
+    right_summary_df = convert_summary_df_for_value_mode(right_result["summary_df"], right_result["inputs"], value_mode)
+
+    comparison_rows = [
+        {
+            "Saved Result": left_name,
+            "Scenario": left_scenario_name,
+            "Success Rate": left_result["success_rate"],
+            "Median Final Wealth": left_summary_df["final_wealth"].median(),
+            "P10 Final Wealth": left_summary_df["final_wealth"].quantile(0.10),
+            "P90 Final Wealth": left_summary_df["final_wealth"].quantile(0.90),
+        },
+        {
+            "Saved Result": right_name,
+            "Scenario": right_scenario_name,
+            "Success Rate": right_result["success_rate"],
+            "Median Final Wealth": right_summary_df["final_wealth"].median(),
+            "P10 Final Wealth": right_summary_df["final_wealth"].quantile(0.10),
+            "P90 Final Wealth": right_summary_df["final_wealth"].quantile(0.90),
+        },
+    ]
+    comparison_table = pd.DataFrame(comparison_rows)
+    st.dataframe(
+        comparison_table,
+        use_container_width=True,
+        column_config={
+            "Success Rate": st.column_config.NumberColumn("Success Rate", format="%.1f%%"),
+            "Median Final Wealth": st.column_config.NumberColumn("Median Final Wealth", format="$%.0f"),
+            "P10 Final Wealth": st.column_config.NumberColumn("P10 Final Wealth", format="$%.0f"),
+            "P90 Final Wealth": st.column_config.NumberColumn("P90 Final Wealth", format="$%.0f"),
+        },
+    )
+
+    left_det = convert_det_df_for_value_mode(left_result["det_df"], left_result["inputs"], value_mode).copy()
+    right_det = convert_det_df_for_value_mode(right_result["det_df"], right_result["inputs"], value_mode).copy()
+    left_det["comparison_name"] = left_name
+    right_det["comparison_name"] = right_name
+    combined = pd.concat([left_det, right_det], ignore_index=True)
+
+    fig = px.line(
+        combined,
+        x="financial_year_end",
+        y="total_wealth",
+        color="comparison_name",
+        title=t("Saved Results Wealth Comparison", "已保存结果财富对比"),
+    )
+    fig.update_layout(
+        xaxis_title=t("Financial Year", "财政年度"),
+        yaxis_title=display_value_label(value_mode),
+        hovermode="x unified",
+    )
+    fig.update_yaxes(tickprefix="$", separatethousands=True)
+    st.plotly_chart(fig, use_container_width=True, key="saved_results_compare_chart")
 
 
 def get_missing_validation_columns(det_df):
@@ -710,6 +958,7 @@ defaults = {
     "saved_result_sets": {},
     "active_result_set_name": "Current Results",
     "save_result_name": "",
+    "rename_result_name": "",
     "assumption_details_df": None,
     "input_summary_df": None,
     "contribution_schedule_export_df": None,
@@ -717,6 +966,7 @@ defaults = {
     "output_warnings_by_scenario": None,
     "last_run_inputs_by_scenario": None,
     "assumption_preset": "Base Case",
+    "value_mode": "Future Value",
     "start_financial_year": 2027,
     "projection_years": 40,
     "retirement_spending_trigger": "Both Retired",
@@ -785,7 +1035,6 @@ def apply_preset_values(preset_name, preset_map):
         st.session_state.cgt_discount_rate = preset_values["cgt_discount_rate"]
 
 
-
 # ============================================================
 # SECTION: SESSION NORMALISATION
 # ============================================================
@@ -810,6 +1059,7 @@ start_financial_year = int(st.session_state.start_financial_year)
 projection_years = int(st.session_state.projection_years)
 retirement_spending_trigger = st.session_state.retirement_spending_trigger
 household_mode = st.session_state.household_mode
+value_mode = st.session_state.value_mode
 is_one_person_mode = household_mode == "One Person"
 
 person1_current_age = int(st.session_state.person1_current_age)
@@ -858,14 +1108,13 @@ contribution_events_df = normalise_contribution_events(
     household_mode=household_mode,
 )
 
-
 # ============================================================
 # SECTION: SIDEBAR CONTROLS
 # ============================================================
 
-
 with st.sidebar:
     st.markdown(f"### {t('Controls', '控制面板')}")
+
     selected_language = st.radio(
         t("Language", "语言"),
         options=[LANGUAGE_EN, LANGUAGE_CN],
@@ -890,13 +1139,15 @@ with st.sidebar:
     )
     is_one_person_mode = household_mode == "One Person"
 
-    if is_one_person_mode:
-        st.info(
-            t(
-                "One Person mode sets Person 2 assets, income, super and contributions to zero inside the model. Review household spending manually if the previous assumptions were for two people.",
-                "单人模式会在模型内部将人物 2 的资产、收入、养老金与缴款全部视为 0。若你之前输入的是双人家庭支出，请手动检查 household spending。",
-            )
-        )
+    value_mode = st.radio(
+        t("Value Display", "数值显示"),
+        options=["Future Value", "Present Value"],
+        index=0 if st.session_state.value_mode == "Future Value" else 1,
+        help=t(
+            "Present Value discounts displayed monetary outputs back to the starting financial year using the inflation assumption.",
+            "现值会按 inflation 假设把显示金额折算回起始财政年度。",
+        ),
+    )
 
     scenario_mode = st.radio(
         t("Scenario Mode", "情景模式"),
@@ -909,6 +1160,14 @@ with st.sidebar:
         key="assumption_preset",
         disabled=(scenario_mode == t("Compare Standard Presets", "比较标准预设")),
     )
+
+    if is_one_person_mode:
+        st.info(
+            t(
+                "One Person mode removes Person 2 from the model. Household spending remains exactly as entered, so review your spending assumptions manually.",
+                "单人模式会把 Person 2 从模型中移除。家庭支出会保持原输入值不变，因此请手动检查支出假设。",
+            )
+        )
 
     st.markdown(f"### {t('Saved Results', '已保存结果')}")
     saved_result_sets = st.session_state.get("saved_result_sets", {})
@@ -946,15 +1205,50 @@ with st.sidebar:
     )
 
     if active_result_set_name != "Current Results":
-        if st.button(t("Delete Selected Saved Results", "删除当前已保存结果"), use_container_width=True):
-            saved_sets = copy.deepcopy(st.session_state.get("saved_result_sets", {}))
-            if active_result_set_name in saved_sets:
-                del saved_sets[active_result_set_name]
-                st.session_state.saved_result_sets = saved_sets
-                st.session_state.active_result_set_name = "Current Results"
-                st.rerun()
+        rename_result_name = st.text_input(
+            t("Rename Selected Saved Result", "重命名当前已保存结果"),
+            value=st.session_state.get("rename_result_name", active_result_set_name),
+            key="rename_result_name_input",
+        )
+        st.session_state.rename_result_name = rename_result_name
+
+        rename_button = st.button(
+            t("Rename Saved Result", "重命名已保存结果"),
+            use_container_width=True,
+        )
+
+        delete_button = st.button(
+            t("Delete Selected Saved Result", "删除当前已保存结果"),
+            use_container_width=True,
+        )
+    else:
+        rename_button = False
+        delete_button = False
 
     run_button = st.button(t("Run Simulation", "运行模拟"), type="primary", use_container_width=True)
+
+
+if save_results_button:
+    ok, message = save_current_results_snapshot(save_result_name)
+    (st.success if ok else st.error)(message)
+
+if rename_button:
+    ok, message = rename_saved_results_snapshot(
+        st.session_state.get("active_result_set_name", ""),
+        st.session_state.get("rename_result_name", ""),
+    )
+    (st.success if ok else st.error)(message)
+
+if delete_button:
+    selected_name = st.session_state.get("active_result_set_name", "")
+    saved_sets = copy.deepcopy(st.session_state.get("saved_result_sets", {}))
+    if selected_name in saved_sets:
+        del saved_sets[selected_name]
+        st.session_state.saved_result_sets = saved_sets
+        st.session_state.active_result_set_name = "Current Results"
+        st.success(t(f"Deleted saved result: {selected_name}", f"已删除已保存结果：{selected_name}"))
+        st.rerun()
+
 
 st.title(t("Retirement Modelling Suite (Australia)", "退休建模工具（澳大利亚）"))
 st.subheader(t("Superannuation • Tax • CGT • Retirement Cashflow Modelling", "养老金 • 税务 • 资本利得税 • 退休现金流建模"))
@@ -1037,12 +1331,13 @@ section_keys = [
     "report",
     "projection",
     "person1",
-    "person2",
     "household",
     "contributions",
     "returns",
     "simulation",
 ]
+if not is_one_person_mode:
+    section_keys.insert(3, "person2")
 
 section_labels = {
     "report": t("Report", "报告"),
@@ -1079,6 +1374,8 @@ current_section_key = legacy_section_map.get(current_section_key, current_sectio
 
 if current_section_key not in section_keys:
     current_section_key = "projection"
+if is_one_person_mode and current_section_key == "person2":
+    current_section_key = "household"
 
 selected_section_label = st.segmented_control(
     t("Input Section", "输入区"),
@@ -1099,6 +1396,7 @@ if active_input_section == "report":
         t("Title (Optional)", "标题（可选）"),
         value=st.session_state.report_title,
         key="report_title_input",
+        help=t("Used in exports and saved result documentation.", "用于导出文件和已保存结果说明。"),
     )
 
     st.subheader(t("Names", "姓名"))
@@ -1108,6 +1406,7 @@ if active_input_section == "report":
             t("Person 1 Name (Optional)", "人物 1 姓名（可选）"),
             value=st.session_state.person1_name,
             key="person1_name_input",
+            help=t("Optional display name used in charts and tables.", "用于图表和表格中的可选显示名称。"),
         )
     with name_col2:
         person2_name = st.text_input(
@@ -1115,7 +1414,10 @@ if active_input_section == "report":
             value=st.session_state.person2_name,
             key="person2_name_input",
             disabled=is_one_person_mode,
+            help=t("Optional display name used in charts and tables.", "用于图表和表格中的可选显示名称。"),
         )
+        if is_one_person_mode:
+            person2_name = ""
 
 elif active_input_section == "projection":
     st.subheader(t("Projection Timing", "预测时间设置"))
@@ -1126,6 +1428,7 @@ elif active_input_section == "projection":
             value=int(st.session_state.start_financial_year),
             step=1,
             min_value=2000,
+            help=t("Financial year end used as year 1 of the projection, e.g. 2027 means 2026/27.", "预测起始财政年度的终点年，例如 2027 表示 2026/27 财年。"),
         )
     with col2:
         projection_years = st.number_input(
@@ -1133,6 +1436,7 @@ elif active_input_section == "projection":
             value=int(st.session_state.projection_years),
             step=1,
             min_value=1,
+            help=t("How many financial years to project forward.", "向前预测多少个财政年度。"),
         )
     with col3:
         retirement_spending_trigger = st.selectbox(
@@ -1157,16 +1461,19 @@ elif active_input_section == "person1":
             t("Person 1 Current Age", "人物 1 当前年龄"),
             value=int(st.session_state.person1_current_age),
             step=1,
+            help=t("Current age at the start of the projection.", "预测开始时的当前年龄。"),
         )
         person1_accum_super_balance = currency_text_input(
             t("Person 1 Accumulation Super Balance", "人物 1 累积型养老金余额"),
             st.session_state.person1_accum_super_balance,
             "person1_accum_super_balance_input",
+            help_text=t("Opening accumulation super balance.", "期初 accumulation super 余额。"),
         )
         person1_pension_super_balance = currency_text_input(
             t("Person 1 Pension Super Balance", "人物 1 养老金阶段余额"),
             st.session_state.person1_pension_super_balance,
             "person1_pension_super_balance_input",
+            help_text=t("Opening pension super balance.", "期初 pension super 余额。"),
         )
     with p1b:
         person1_retirement_age = st.number_input(
@@ -1178,11 +1485,13 @@ elif active_input_section == "person1":
             t("Person 1 Accumulation Super Cost Base", "人物 1 累积型养老金成本基础"),
             st.session_state.person1_accum_super_cost_base,
             "person1_accum_super_cost_base_input",
+            help_text=t("Cost base used for super withdrawal CGT approximation in accumulation phase.", "用于 accumulation 阶段提取 CGT 近似计算的成本基础。"),
         )
         person1_pension_super_cost_base = currency_text_input(
             t("Person 1 Pension Super Cost Base", "人物 1 养老金阶段成本基础"),
             st.session_state.person1_pension_super_cost_base,
             "person1_pension_super_cost_base_input",
+            help_text=t("Cost base carried inside the pension pool for internal tracking.", "用于 pension 池内部追踪的成本基础。"),
         )
     with p1c:
         person1_pension_start_age = st.number_input(
@@ -1194,87 +1503,75 @@ elif active_input_section == "person1":
             t("Person 1 Transfer Balance Cap", "人物 1 转移余额上限"),
             st.session_state.person1_transfer_balance_cap,
             "person1_transfer_balance_cap_input",
+            help_text=t("Transfer Balance Cap used when moving accumulation super to pension.", "accumulation 转 pension 时使用的 Transfer Balance Cap。"),
         )
         person1_annual_income = currency_text_input(
             t("Person 1 Annual Income", "人物 1 年收入"),
             st.session_state.person1_annual_income,
             "person1_annual_income_input",
+            help_text=t("Gross annual employment income while still working.", "仍在工作时的税前年收入。"),
         )
 
 elif active_input_section == "person2":
     st.subheader(t("Person 2", "人物 2"))
-    if is_one_person_mode:
-        st.info(t("Household Mode is set to One Person. Person 2 inputs are disabled and will be treated as zero inside the model.", "当前为单人模式。Person 2 输入已禁用，模型内部将按 0 处理。"))
     p2a, p2b, p2c = st.columns(3)
     with p2a:
         person2_current_age = st.number_input(
             t("Person 2 Current Age", "人物 2 当前年龄"),
             value=int(st.session_state.person2_current_age),
             step=1,
-            disabled=is_one_person_mode,
+            help=t("Current age at the start of the projection.", "预测开始时的当前年龄。"),
         )
         person2_accum_super_balance = currency_text_input(
             t("Person 2 Accumulation Super Balance", "人物 2 累积型养老金余额"),
             st.session_state.person2_accum_super_balance,
             "person2_accum_super_balance_input",
-            disabled=is_one_person_mode,
+            help_text=t("Opening accumulation super balance.", "期初 accumulation super 余额。"),
         )
-        if is_one_person_mode:
-            person2_accum_super_balance = 0.0
         person2_pension_super_balance = currency_text_input(
             t("Person 2 Pension Super Balance", "人物 2 养老金阶段余额"),
             st.session_state.person2_pension_super_balance,
             "person2_pension_super_balance_input",
-            disabled=is_one_person_mode,
+            help_text=t("Opening pension super balance.", "期初 pension super 余额。"),
         )
-        if is_one_person_mode:
-            person2_pension_super_balance = 0.0
     with p2b:
         person2_retirement_age = st.number_input(
             t("Person 2 Retirement Age", "人物 2 退休年龄"),
             value=int(st.session_state.person2_retirement_age),
             step=1,
-            disabled=is_one_person_mode,
+            help=t("Employment income stops once current age reaches retirement age.", "达到退休年龄后，employment income 停止。"),
         )
         person2_accum_super_cost_base = currency_text_input(
             t("Person 2 Accumulation Super Cost Base", "人物 2 累积型养老金成本基础"),
             st.session_state.person2_accum_super_cost_base,
             "person2_accum_super_cost_base_input",
-            disabled=is_one_person_mode,
+            help_text=t("Cost base used for super withdrawal CGT approximation in accumulation phase.", "用于 accumulation 阶段提取 CGT 近似计算的成本基础。"),
         )
-        if is_one_person_mode:
-            person2_accum_super_cost_base = 0.0
         person2_pension_super_cost_base = currency_text_input(
             t("Person 2 Pension Super Cost Base", "人物 2 养老金阶段成本基础"),
             st.session_state.person2_pension_super_cost_base,
             "person2_pension_super_cost_base_input",
-            disabled=is_one_person_mode,
+            help_text=t("Cost base carried inside the pension pool for internal tracking.", "用于 pension 池内部追踪的成本基础。"),
         )
-        if is_one_person_mode:
-            person2_pension_super_cost_base = 0.0
     with p2c:
         person2_pension_start_age = st.number_input(
             t("Person 2 Pension Start Age", "人物 2 养老金开始年龄"),
             value=int(st.session_state.person2_pension_start_age),
             step=1,
-            disabled=is_one_person_mode,
+            help=t("Age when accumulation super can start transferring into pension phase in the model.", "模型中 accumulation super 开始转入 pension 的年龄。"),
         )
         person2_transfer_balance_cap = currency_text_input(
             t("Person 2 Transfer Balance Cap", "人物 2 转移余额上限"),
             st.session_state.person2_transfer_balance_cap,
             "person2_transfer_balance_cap_input",
-            disabled=is_one_person_mode,
+            help_text=t("Transfer Balance Cap used when moving accumulation super to pension.", "accumulation 转 pension 时使用的 Transfer Balance Cap。"),
         )
-        if is_one_person_mode:
-            person2_transfer_balance_cap = 0.0
         person2_annual_income = currency_text_input(
             t("Person 2 Annual Income", "人物 2 年收入"),
             st.session_state.person2_annual_income,
             "person2_annual_income_input",
-            disabled=is_one_person_mode,
+            help_text=t("Gross annual employment income while still working.", "仍在工作时的税前年收入。"),
         )
-        if is_one_person_mode:
-            person2_annual_income = 0.0
 
 elif active_input_section == "household":
     st.subheader(t("Household", "家庭"))
@@ -1282,7 +1579,7 @@ elif active_input_section == "household":
         st.info(
             t(
                 "One Person mode removes Person 2 from the model, but the household spending fields below stay exactly as entered. Reduce them manually if you want a true one-person budget.",
-                "单人模式会把人物 2 从模型中移除，但下面的家庭支出栏位不会自动变化。如果你希望按单人预算建模，请手动调低这些数值。",
+                "单人模式会把 Person 2 从模型中移除，但下面的家庭支出栏位不会自动变化。如果你希望按单人预算建模，请手动调低这些数值。",
             )
         )
     hh1, hh2 = st.columns(2)
@@ -1291,28 +1588,33 @@ elif active_input_section == "household":
             t("Non-Super Balance", "非养老金资产余额"),
             st.session_state.non_super_balance,
             "non_super_balance_input",
+            help_text=t("Opening non-super investment pool market value.", "期初非养老金投资池市值。"),
         )
         annual_living_expenses = currency_text_input(
             t("Annual Living Expenses", "年度生活支出"),
             st.session_state.annual_living_expenses,
             "annual_living_expenses_input",
+            help_text=t("Current annual household spending before retirement trigger applies.", "退休支出触发前的当前年度家庭支出。"),
         )
         cgt_discount_rate = percentage_text_input(
             t("CGT Discount Rate", "资本利得税折扣率"),
             float(st.session_state.cgt_discount_rate),
             "cgt_discount_rate_input",
             decimals=1,
+            help_text=t("Discount applied to non-super realised capital gains under the average-cost model.", "在 average-cost 模型下适用于非养老金已实现资本利得的折扣率。"),
         )
     with hh2:
         non_super_cost_base = currency_text_input(
             t("Non-Super Cost Base", "非养老金资产成本基础"),
             st.session_state.non_super_cost_base,
             "non_super_cost_base_input",
+            help_text=t("Cost base of the non-super investment pool. It must not exceed market value.", "非养老金投资池的成本基础，不能高于当前市值。"),
         )
         retirement_spending = currency_text_input(
             t("Retirement Spending", "退休后支出"),
             st.session_state.retirement_spending,
             "retirement_spending_input",
+            help_text=t("Target household spending after the retirement trigger is reached. This amount is internally indexed by inflation before activation.", "达到退休触发条件后的目标家庭支出。该数值在生效前也会按 inflation 内部递增。"),
         )
         if is_one_person_mode:
             st.text_input(
@@ -1320,6 +1622,7 @@ elif active_input_section == "household":
                 value="100.0%",
                 disabled=True,
                 key="non_super_ownership_person1_display",
+                help=t("Single-person mode fixes non-super ownership to 100% Person 1.", "单人模式下非养老金持有比例固定为 Person 1 的 100%。"),
             )
             non_super_ownership_person1 = 100.0
         else:
@@ -1328,6 +1631,7 @@ elif active_input_section == "household":
                 st.session_state.non_super_ownership_person1_pct / 100.0,
                 "non_super_ownership_person1_input",
                 decimals=1,
+                help_text=t("Share of non-super taxable income and tax allocated to Person 1.", "分配给 Person 1 的非养老金应税收入与税负比例。"),
             ) * 100.0
 
 elif active_input_section == "contributions":
@@ -1377,18 +1681,21 @@ elif active_input_section == "returns":
                 st.session_state.super_income_return_mean,
                 "super_income_return_mean_input",
                 decimals=1,
+                help_text=t("Expected annual income-style return on super assets.", "养老金资产的年度收益型回报假设。"),
             )
             super_capital_return_mean = percentage_text_input(
                 t("Super Capital Return Mean", "养老金资本增值回报均值"),
                 st.session_state.super_capital_return_mean,
                 "super_capital_return_mean_input",
                 decimals=1,
+                help_text=t("Expected annual capital growth on super assets.", "养老金资产的年度资本增值回报假设。"),
             )
             inflation_rate = percentage_text_input(
                 t("Inflation Rate", "通胀率"),
                 st.session_state.inflation_rate,
                 "inflation_rate_input",
                 decimals=1,
+                help_text=t("Inflation used to index salary and spending assumptions.", "用于收入与支出递增的 inflation 假设。"),
             )
         with r2:
             super_income_return_std = percentage_text_input(
@@ -1511,6 +1818,7 @@ st.session_state.start_financial_year = int(start_financial_year)
 st.session_state.projection_years = int(projection_years)
 st.session_state.retirement_spending_trigger = retirement_spending_trigger
 st.session_state.household_mode = household_mode
+st.session_state.value_mode = value_mode
 st.session_state.report_title = report_title
 st.session_state.person1_name = person1_name
 st.session_state.person2_name = person2_name
@@ -1551,8 +1859,6 @@ st.session_state.non_super_capital_return_std = non_super_capital_return_std
 st.session_state.inflation_rate = inflation_rate
 st.session_state.number_of_simulations = int(number_of_simulations)
 st.session_state.random_seed = int(random_seed)
-
-
 
 if is_one_person_mode:
     person2_name = ""
@@ -1619,27 +1925,7 @@ base_inputs = {
     "person2_pension_super_cost_base": person2_pension_super_cost_base,
 }
 
-
-# ============================================================
-# SECTION: RESULT SNAPSHOT SAVE
-# ============================================================
-
-if save_results_button:
-    current_bundle = build_current_result_bundle_from_session_state()
-
-    if current_bundle is None:
-        st.error(t("There are no current results to save yet.", "当前还没有可保存的结果。"))
-    else:
-        snapshot_name = str(save_result_name or "").strip()
-        if not snapshot_name:
-            st.error(t("Please enter a name for the saved results.", "请先输入保存结果的名称。"))
-        else:
-            saved_sets = copy.deepcopy(st.session_state.get("saved_result_sets", {}))
-            saved_sets[snapshot_name] = current_bundle
-            st.session_state.saved_result_sets = saved_sets
-            st.session_state.active_result_set_name = snapshot_name
-            st.success(t(f"Saved results as: {snapshot_name}", f"已保存结果：{snapshot_name}"))
-
+render_live_input_feedback(base_inputs)
 
 # ============================================================
 # SECTION: RUN LOGIC
@@ -1738,10 +2024,13 @@ if active_result_bundle is not None:
     input_warnings_by_scenario = active_result_bundle["input_warnings_by_scenario"]
     output_warnings_by_scenario = active_result_bundle["output_warnings_by_scenario"]
 
-    if st.session_state.get("active_result_set_name", "Current Results") == "Current Results":
+    active_name_display = st.session_state.get("active_result_set_name", "Current Results")
+    if active_name_display == "Current Results":
         st.caption(t("Showing: Current Results", "当前显示：最新结果"))
     else:
-        st.caption(t(f"Showing saved snapshot: {st.session_state.get("active_result_set_name", "")}", f"当前显示：已保存快照 {st.session_state.get("active_result_set_name", "")}"))
+        st.caption(t(f"Showing saved snapshot: {active_name_display}", f"当前显示：已保存快照：{active_name_display}"))
+
+    render_saved_result_comparison_section(st.session_state.get("saved_result_sets", {}), value_mode)
 
     render_assumption_details(assumption_details_df)
     render_warning_sections(input_warnings_by_scenario, output_warnings_by_scenario, view_mode)
@@ -1765,10 +2054,11 @@ if active_result_bundle is not None:
         det_scenarios_df_list.append(temp_det_df)
 
     comparison_df = pd.DataFrame(comparison_rows)
-    comparison_df = format_comparison_df(comparison_df)
-    det_scenarios_df = pd.concat(det_scenarios_df_list, ignore_index=True)
-
     common_inputs = next(iter(comparison_results.values()))["inputs"]
+    comparison_df = format_comparison_df(comparison_df)
+    comparison_df = convert_comparison_df_for_value_mode(comparison_df, common_inputs, value_mode)
+    det_scenarios_df = pd.concat(det_scenarios_df_list, ignore_index=True)
+    det_scenarios_df = convert_det_df_for_value_mode(det_scenarios_df, common_inputs, value_mode)
 
     st.subheader(t("Scenario Comparison Summary", "情景比较摘要"))
     st.dataframe(
@@ -1788,6 +2078,14 @@ if active_result_bundle is not None:
         key="selected_scenario_results",
     )
     selected_result = comparison_results[selected_scenario]
+    display_det_df = convert_det_df_for_value_mode(selected_result["det_df"], selected_result["inputs"], value_mode)
+    display_percentile_df = convert_percentile_df_for_value_mode(selected_result["percentile_df"], selected_result["inputs"], value_mode)
+    display_summary_df = convert_summary_df_for_value_mode(selected_result["summary_df"], selected_result["inputs"], value_mode)
+
+    selected_success_rate = selected_result["success_rate"]
+    selected_median_final_wealth = display_summary_df["final_wealth"].median()
+    selected_p10_final_wealth = display_summary_df["final_wealth"].quantile(0.10)
+    selected_p90_final_wealth = display_summary_df["final_wealth"].quantile(0.90)
 
     if view_mode == t("Adviser View", "顾问视图"):
         st.subheader(t(f"Adviser Summary - {selected_scenario}", f"顾问摘要 - {selected_scenario}"))
@@ -1795,19 +2093,19 @@ if active_result_bundle is not None:
 
         top_col1, top_col2 = st.columns(2)
         top_col1.metric(t("Success Rate", "成功率"), f"{selected_result['success_rate']:.1%}")
-        top_col2.metric(t("Median Final Wealth", "最终财富中位数"), f"${selected_result['median_final_wealth']:,.0f}")
+        top_col2.metric(t("Median Final Wealth", "最终财富中位数"), f"${selected_median_final_wealth:,.0f}")
 
         bottom_col1, bottom_col2, bottom_col3 = st.columns(3)
-        bottom_col1.metric(t("P10 Final Wealth", "P10 最终财富"), f"${selected_result['p10_final_wealth']:,.0f}")
-        bottom_col2.metric(t("P90 Final Wealth", "P90 最终财富"), f"${selected_result['p90_final_wealth']:,.0f}")
-        bottom_col3.metric(t("Spread (P90 - P10)", "区间差值（P90 - P10）"), f"${selected_result['p90_final_wealth'] - selected_result['p10_final_wealth']:,.0f}")
+        bottom_col1.metric(t("P10 Final Wealth", "P10 最终财富"), f"${selected_p10_final_wealth:,.0f}")
+        bottom_col2.metric(t("P90 Final Wealth", "P90 最终财富"), f"${selected_p90_final_wealth:,.0f}")
+        bottom_col3.metric(t("Spread (P90 - P10)", "区间差值（P90 - P10）"), f"${selected_p90_final_wealth - selected_p10_final_wealth:,.0f}")
 
-        missing_validation_cols = get_missing_validation_columns(selected_result["det_df"])
+        missing_validation_cols = get_missing_validation_columns(display_det_df)
         if missing_validation_cols:
             st.warning(t("Validation table is using fallback zeros for missing columns.", "验证表对缺失栏位使用了回退零值。"))
             st.caption(", ".join(missing_validation_cols))
 
-        adviser_cashflow_df = build_adviser_cashflow_df(selected_result["det_df"])
+        adviser_cashflow_df = build_adviser_cashflow_df(display_det_df)
         st.subheader(t("Adviser Cashflow Summary", "顾问现金流摘要"))
         st.dataframe(
             adviser_cashflow_df,
@@ -1821,7 +2119,7 @@ if active_result_bundle is not None:
             },
         )
 
-        pension_tax_free_summary_df = build_pension_tax_free_summary_df(selected_result["det_df"])
+        pension_tax_free_summary_df = build_pension_tax_free_summary_df(display_det_df)
         st.subheader(t("Pension Tax-Free Validation Summary", "退休金免税验证摘要"))
         st.dataframe(
             pension_tax_free_summary_df,
@@ -1832,7 +2130,7 @@ if active_result_bundle is not None:
             },
         )
 
-        debug_df = build_adviser_debug_df(selected_result["det_df"])
+        debug_df = build_adviser_debug_df(display_det_df)
         st.subheader(t("Adviser Debug Table", "顾问调试表"))
         st.dataframe(
             debug_df,
@@ -1874,7 +2172,7 @@ if active_result_bundle is not None:
             },
         )
 
-        cgt_validation_df = build_cgt_validation_df(selected_result["det_df"])
+        cgt_validation_df = build_cgt_validation_df(display_det_df)
         with st.expander(t("Detailed CGT / Pension Validation Table", "详细 CGT / 退休金验证表"), expanded=False):
             st.dataframe(
                 cgt_validation_df,
@@ -1908,10 +2206,10 @@ if active_result_bundle is not None:
                 },
             )
 
-        tax_breakdown_fig = create_tax_breakdown_chart(selected_result["det_df"], selected_result["inputs"], f"Tax Breakdown - {selected_scenario}")
+        tax_breakdown_fig = create_tax_breakdown_chart(display_det_df, selected_result["inputs"], f"Tax Breakdown - {selected_scenario}")
         st.plotly_chart(tax_breakdown_fig, use_container_width=True, key=chart_key("tax_breakdown", selected_scenario, view_mode, "adviser"))
 
-        total_tax_fig = create_total_tax_paid_chart(selected_result["det_df"], selected_result["inputs"], f"Total Tax Paid - {selected_scenario}")
+        total_tax_fig = create_total_tax_paid_chart(display_det_df, selected_result["inputs"], f"Total Tax Paid - {selected_scenario}")
         st.plotly_chart(total_tax_fig, use_container_width=True, key=chart_key("total_tax", selected_scenario, view_mode, "adviser"))
 
         excel_file = dataframe_to_excel_bytes(
@@ -1919,9 +2217,9 @@ if active_result_bundle is not None:
                 "input_summary": input_summary_df,
                 "assumption_details": assumption_details_df,
                 "contribution_schedule": contribution_schedule_export_df,
-                "deterministic_projection": selected_result["det_df"],
-                "simulation_summary": selected_result["summary_df"],
-                "percentile_table": selected_result["percentile_df"],
+                "deterministic_projection": display_det_df,
+                "simulation_summary": display_summary_df,
+                "percentile_table": display_percentile_df,
                 "failure_probability": selected_result["failure_prob_df"],
                 "adviser_cashflow_summary": adviser_cashflow_df,
                 "adviser_debug_table": debug_df,
@@ -1942,18 +2240,18 @@ if active_result_bundle is not None:
 
         col1, col2, col3, col4 = st.columns(4)
         col1.metric(t("Success Rate", "成功率"), f"{selected_result['success_rate']:.1%}")
-        col2.metric(t("Median Final Wealth", "最终财富中位数"), f"${selected_result['median_final_wealth']:,.0f}")
-        col3.metric(t("P10 Final Wealth", "P10 最终财富"), f"${selected_result['p10_final_wealth']:,.0f}")
-        col4.metric(t("P90 Final Wealth", "P90 最终财富"), f"${selected_result['p90_final_wealth']:,.0f}")
+        col2.metric(t("Median Final Wealth", "最终财富中位数"), f"${selected_median_final_wealth:,.0f}")
+        col3.metric(t("P10 Final Wealth", "P10 最终财富"), f"${selected_p10_final_wealth:,.0f}")
+        col4.metric(t("P90 Final Wealth", "P90 最终财富"), f"${selected_p90_final_wealth:,.0f}")
 
-        det_single_df = selected_result["det_df"]
+        det_single_df = display_det_df
         det_single_compare_df = det_single_df.copy()
         det_single_compare_df["scenario"] = selected_scenario
 
         det_fig = create_deterministic_wealth_chart_comparison(det_single_compare_df, selected_result["inputs"])
         st.plotly_chart(det_fig, use_container_width=True, key=chart_key("deterministic", selected_scenario, view_mode, "client"))
 
-        percentile_fig = create_percentile_paths_chart(selected_result["percentile_df"], selected_result["inputs"], f"Monte Carlo Percentile Paths - {selected_scenario}")
+        percentile_fig = create_percentile_paths_chart(display_percentile_df, selected_result["inputs"], f"Monte Carlo Percentile Paths - {selected_scenario}")
         st.plotly_chart(percentile_fig, use_container_width=True, key=chart_key("percentile", selected_scenario, view_mode, "client"))
 
         failure_fig = create_failure_probability_chart(selected_result["failure_prob_df"], selected_result["inputs"], f"Cumulative Probability of Running Out of Money - {selected_scenario}")
@@ -1968,9 +2266,9 @@ if active_result_bundle is not None:
                 "input_summary": input_summary_df,
                 "assumption_details": assumption_details_df,
                 "contribution_schedule": contribution_schedule_export_df,
-                "deterministic_projection": selected_result["det_df"],
-                "simulation_summary": selected_result["summary_df"],
-                "percentile_table": selected_result["percentile_df"],
+                "deterministic_projection": display_det_df,
+                "simulation_summary": display_summary_df,
+                "percentile_table": display_percentile_df,
                 "failure_probability": selected_result["failure_prob_df"],
             }
         )
