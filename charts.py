@@ -14,34 +14,52 @@ def _person_label(inputs, key, fallback):
 
 def _add_lifecycle_markers(fig, inputs):
     start_fy_end = int(str(inputs["start_financial_year"]).replace("FY", ""))
-
-    p1_retirement_fy = start_fy_end + (inputs["person1_retirement_age"] - inputs["person1_current_age"])
-    p2_retirement_fy = start_fy_end + (inputs["person2_retirement_age"] - inputs["person2_current_age"])
-    p1_pension_fy = start_fy_end + (inputs["person1_pension_start_age"] - inputs["person1_current_age"])
-    p2_pension_fy = start_fy_end + (inputs["person2_pension_start_age"] - inputs["person2_current_age"])
+    one_person_mode = str(inputs.get("household_mode", "Two People")) == "One Person"
 
     p1_label = _person_label(inputs, "person1_name", "P1")
     p2_label = _person_label(inputs, "person2_name", "P2")
 
-    markers = [
-        (p1_retirement_fy, f"{p1_label} Retirement"),
-        (p2_retirement_fy, f"{p2_label} Retirement"),
-        (p1_pension_fy, f"{p1_label} Pension Start"),
-        (p2_pension_fy, f"{p2_label} Pension Start"),
+    raw_markers = [
+        (start_fy_end + (inputs["person1_retirement_age"] - inputs["person1_current_age"]), f"{p1_label} Retirement"),
+        (start_fy_end + (inputs["person1_pension_start_age"] - inputs["person1_current_age"]), f"{p1_label} Pension Start"),
     ]
 
+    if not one_person_mode:
+        raw_markers.extend([
+            (start_fy_end + (inputs["person2_retirement_age"] - inputs["person2_current_age"]), f"{p2_label} Retirement"),
+            (start_fy_end + (inputs["person2_pension_start_age"] - inputs["person2_current_age"]), f"{p2_label} Pension Start"),
+        ])
+
+    year_groups = {}
     seen = set()
-    for x_value, label in markers:
+    for x_value, label in raw_markers:
         dedupe_key = (x_value, label)
         if dedupe_key in seen:
             continue
         seen.add(dedupe_key)
-        fig.add_vline(
-            x=x_value,
-            line_dash="dash",
-            annotation_text=label,
-            annotation_position="top",
-        )
+        year_groups.setdefault(x_value, []).append(label)
+
+    line_colours = ["rgba(80,80,80,0.55)", "rgba(80,80,80,0.45)", "rgba(80,80,80,0.35)", "rgba(80,80,80,0.25)"]
+    y_positions = [1.11, 1.06, 1.01, 0.96]
+
+    for x_value, labels in sorted(year_groups.items()):
+        fig.add_vline(x=x_value, line_dash="dash", line_color="rgba(90,90,90,0.45)")
+        for idx, label in enumerate(labels):
+            fig.add_annotation(
+                x=x_value,
+                y=y_positions[idx % len(y_positions)],
+                xref="x",
+                yref="paper",
+                text=label,
+                showarrow=False,
+                xanchor="left" if idx % 2 == 0 else "right",
+                align="left",
+                bgcolor="rgba(255,255,255,0.82)",
+                bordercolor=line_colours[idx % len(line_colours)],
+                borderwidth=1,
+                borderpad=2,
+                font=dict(size=11),
+            )
 
     return fig
 

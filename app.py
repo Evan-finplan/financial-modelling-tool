@@ -147,6 +147,19 @@ def get_default_contribution_events_df():
     )
 
 
+def is_one_person_inputs(inputs):
+    return str(inputs.get("household_mode", "Two People")) == "One Person"
+
+
+def drop_person2_columns_if_single(df, inputs):
+    if df is None:
+        return df
+    if not is_one_person_inputs(inputs):
+        return df
+    keep_cols = [col for col in df.columns if "P2" not in str(col)]
+    return df[keep_cols].copy()
+
+
 # ============================================================
 # SECTION: PRESET TABLE HELPERS
 # ============================================================
@@ -234,6 +247,7 @@ def build_assumption_details_df(inputs_by_scenario):
                 "person1_name": scenario_inputs.get("person1_name", ""),
                 "person2_name": scenario_inputs.get("person2_name", ""),
                 "preset": scenario_inputs["assumption_preset"],
+                "household_mode": scenario_inputs.get("household_mode", "Two People"),
                 "start_financial_year": scenario_inputs["start_financial_year"],
                 "projection_years": scenario_inputs["projection_years"],
                 "retirement_spending_trigger": scenario_inputs["retirement_spending_trigger"],
@@ -412,7 +426,7 @@ def build_adviser_cashflow_df(det_df):
     )
 
 
-def build_cgt_validation_df(det_df):
+def build_cgt_validation_df(det_df, inputs):
     df = det_df.copy()
 
     def safe_col(name):
@@ -422,36 +436,38 @@ def build_cgt_validation_df(det_df):
         {
             "Year": df["financial_year_end"] if "financial_year_end" in df.columns else range(len(df)),
             "P1 Age": safe_col("person1_age"),
-            "P2 Age": safe_col("person2_age"),
             "P1 Started Pension This Year": safe_col("person1_started_pension_this_year"),
-            "P2 Started Pension This Year": safe_col("person2_started_pension_this_year"),
             "P1 Has Started Pension": safe_col("person1_has_started_pension"),
-            "P2 Has Started Pension": safe_col("person2_has_started_pension"),
             "P1 Opening Accum Balance": safe_col("opening_person1_accum_super_balance"),
             "P1 Opening Pension Balance": safe_col("opening_person1_pension_super_balance"),
-            "P2 Opening Accum Balance": safe_col("opening_person2_accum_super_balance"),
-            "P2 Opening Pension Balance": safe_col("opening_person2_pension_super_balance"),
             "P1 Ending Accum Balance": safe_col("ending_person1_accum_super_balance"),
             "P1 Ending Pension Balance": safe_col("ending_person1_pension_super_balance"),
-            "P2 Ending Accum Balance": safe_col("ending_person2_accum_super_balance"),
-            "P2 Ending Pension Balance": safe_col("ending_person2_pension_super_balance"),
             "P1 Transfer to Pension": safe_col("person1_transfer_to_pension"),
-            "P2 Transfer to Pension": safe_col("person2_transfer_to_pension"),
             "P1 Total Net Super Contribution": safe_col("person1_total_net_super_contribution"),
-            "P2 Total Net Super Contribution": safe_col("person2_total_net_super_contribution"),
             "P1 Super Realised CGT": safe_col("person1_super_realised_capital_gain"),
-            "P2 Super Realised CGT": safe_col("person2_super_realised_capital_gain"),
             "Super Withdrawal CGT Tax": safe_col("total_super_withdrawal_cgt_tax"),
             "P1 Pension Earnings Tax": safe_col("person1_pension_earnings_tax"),
-            "P2 Pension Earnings Tax": safe_col("person2_pension_earnings_tax"),
             "Super Earnings Tax": safe_col("total_super_earnings_tax"),
         }
     )
 
+    if not is_one_person_inputs(inputs):
+        validation_df.insert(2, "P2 Age", safe_col("person2_age"))
+        validation_df.insert(4, "P2 Started Pension This Year", safe_col("person2_started_pension_this_year"))
+        validation_df.insert(6, "P2 Has Started Pension", safe_col("person2_has_started_pension"))
+        validation_df["P2 Opening Accum Balance"] = safe_col("opening_person2_accum_super_balance")
+        validation_df["P2 Opening Pension Balance"] = safe_col("opening_person2_pension_super_balance")
+        validation_df["P2 Ending Accum Balance"] = safe_col("ending_person2_accum_super_balance")
+        validation_df["P2 Ending Pension Balance"] = safe_col("ending_person2_pension_super_balance")
+        validation_df["P2 Transfer to Pension"] = safe_col("person2_transfer_to_pension")
+        validation_df["P2 Total Net Super Contribution"] = safe_col("person2_total_net_super_contribution")
+        validation_df["P2 Super Realised CGT"] = safe_col("person2_super_realised_capital_gain")
+        validation_df["P2 Pension Earnings Tax"] = safe_col("person2_pension_earnings_tax")
+
     return validation_df
 
 
-def build_pension_tax_free_summary_df(det_df):
+def build_pension_tax_free_summary_df(det_df, inputs):
     df = det_df.copy()
 
     def safe_col(name):
@@ -462,12 +478,15 @@ def build_pension_tax_free_summary_df(det_df):
 
     pension_phase_mask = (
         (safe_col("ending_person1_pension_super_balance") > 0)
-        | (safe_col("ending_person2_pension_super_balance") > 0)
         | (safe_col("person1_transfer_to_pension") > 0)
-        | (safe_col("person2_transfer_to_pension") > 0)
         | (safe_col("person1_has_started_pension") > 0)
-        | (safe_col("person2_has_started_pension") > 0)
     )
+    if not is_one_person_inputs(inputs):
+        pension_phase_mask = pension_phase_mask | (
+            (safe_col("ending_person2_pension_super_balance") > 0)
+            | (safe_col("person2_transfer_to_pension") > 0)
+            | (safe_col("person2_has_started_pension") > 0)
+        )
 
     pension_phase_df = df.loc[pension_phase_mask].copy()
 
@@ -475,41 +494,26 @@ def build_pension_tax_free_summary_df(det_df):
         return pension_phase_df[name].sum() if name in pension_phase_df.columns else 0.0
 
     rows = [
-        {
-            "check": "Total super withdrawal CGT tax (all years)",
-            "value": sum_all("total_super_withdrawal_cgt_tax"),
-        },
-        {
-            "check": "Total super earnings tax (all years)",
-            "value": sum_all("total_super_earnings_tax"),
-        },
-        {
-            "check": "Total super earnings tax (pension phase only)",
-            "value": sum_pension_phase("total_super_earnings_tax"),
-        },
-        {
-            "check": "Total P1 pension earnings tax",
-            "value": sum_all("person1_pension_earnings_tax"),
-        },
-        {
-            "check": "Total P2 pension earnings tax",
-            "value": sum_all("person2_pension_earnings_tax"),
-        },
-        {
-            "check": "Total P1 transfer to pension",
-            "value": sum_all("person1_transfer_to_pension"),
-        },
-        {
-            "check": "Total P2 transfer to pension",
-            "value": sum_all("person2_transfer_to_pension"),
-        },
+        {"check": "Total super withdrawal CGT tax (all years)", "value": sum_all("total_super_withdrawal_cgt_tax")},
+        {"check": "Total super earnings tax (all years)", "value": sum_all("total_super_earnings_tax")},
+        {"check": "Total super earnings tax (pension phase only)", "value": sum_pension_phase("total_super_earnings_tax")},
+        {"check": "Total P1 pension earnings tax", "value": sum_all("person1_pension_earnings_tax")},
+        {"check": "Total P1 transfer to pension", "value": sum_all("person1_transfer_to_pension")},
     ]
+    if not is_one_person_inputs(inputs):
+        rows.extend([
+            {"check": "Total P2 pension earnings tax", "value": sum_all("person2_pension_earnings_tax")},
+            {"check": "Total P2 transfer to pension", "value": sum_all("person2_transfer_to_pension")},
+        ])
 
     return pd.DataFrame(rows)
 
 
 def render_assumption_details(df):
     display_df = format_assumption_display_df(df)
+    all_one_person = ("household_mode" in display_df.columns) and display_df["household_mode"].eq("One Person").all()
+    if all_one_person:
+        display_df = display_df[[col for col in display_df.columns if "person2_" not in str(col).lower()]].copy()
 
     st.subheader(t("Assumption Details", "假设明细"))
     st.dataframe(
@@ -518,6 +522,7 @@ def render_assumption_details(df):
         column_config={
             "scenario": st.column_config.TextColumn("Scenario"),
             "report_title": st.column_config.TextColumn("Title"),
+            "household_mode": st.column_config.TextColumn("Household Mode"),
             "person1_name": st.column_config.TextColumn("Person 1 Name"),
             "person2_name": st.column_config.TextColumn("Person 2 Name"),
             "preset": st.column_config.TextColumn("Preset"),
@@ -773,6 +778,7 @@ def render_saved_result_comparison_section(saved_result_sets, value_mode):
         return
 
     st.subheader(t("Compare Two Saved Results", "比较两个已保存结果"))
+    st.caption(t("Each saved snapshot keeps its own household mode, assumptions, and displayed value basis.", "每个已保存快照都会保留各自的家庭模式、假设以及显示数值口径。"))
 
     saved_names = list(saved_result_sets.keys())
     compare_col1, compare_col2 = st.columns(2)
@@ -864,38 +870,41 @@ def render_saved_result_comparison_section(saved_result_sets, value_mode):
     st.plotly_chart(fig, use_container_width=True, key="saved_results_compare_chart")
 
 
-def get_missing_validation_columns(det_df):
+def get_missing_validation_columns(det_df, inputs):
     required_cols = [
         "financial_year_end",
         "person1_age",
-        "person2_age",
         "person1_started_pension_this_year",
-        "person2_started_pension_this_year",
         "person1_has_started_pension",
-        "person2_has_started_pension",
         "opening_person1_accum_super_balance",
         "opening_person1_pension_super_balance",
-        "opening_person2_accum_super_balance",
-        "opening_person2_pension_super_balance",
         "ending_person1_accum_super_balance",
         "ending_person1_pension_super_balance",
-        "ending_person2_accum_super_balance",
-        "ending_person2_pension_super_balance",
         "person1_transfer_to_pension",
-        "person2_transfer_to_pension",
         "person1_total_net_super_contribution",
-        "person2_total_net_super_contribution",
         "person1_super_realised_capital_gain",
-        "person2_super_realised_capital_gain",
         "total_super_withdrawal_cgt_tax",
         "person1_pension_earnings_tax",
-        "person2_pension_earnings_tax",
         "total_super_earnings_tax",
     ]
+    if not is_one_person_inputs(inputs):
+        required_cols.extend([
+            "person2_age",
+            "person2_started_pension_this_year",
+            "person2_has_started_pension",
+            "opening_person2_accum_super_balance",
+            "opening_person2_pension_super_balance",
+            "ending_person2_accum_super_balance",
+            "ending_person2_pension_super_balance",
+            "person2_transfer_to_pension",
+            "person2_total_net_super_contribution",
+            "person2_super_realised_capital_gain",
+            "person2_pension_earnings_tax",
+        ])
     return [col for col in required_cols if col not in det_df.columns]
 
 
-def build_adviser_debug_df(det_df):
+def build_adviser_debug_df(det_df, inputs):
     df = det_df.copy()
 
     def safe_col(name):
@@ -906,38 +915,41 @@ def build_adviser_debug_df(det_df):
             "Year": safe_col("financial_year_end"),
             "P1 Started Pension This Year": safe_col("person1_started_pension_this_year"),
             "P1 Has Started Pension": safe_col("person1_has_started_pension"),
-            "P2 Started Pension This Year": safe_col("person2_started_pension_this_year"),
-            "P2 Has Started Pension": safe_col("person2_has_started_pension"),
             "P1 Requested Transfer": safe_col("person1_requested_transfer_amount"),
-            "P2 Requested Transfer": safe_col("person2_requested_transfer_amount"),
             "P1 Available Cap Space": safe_col("person1_available_cap_space"),
-            "P2 Available Cap Space": safe_col("person2_available_cap_space"),
             "P1 Transfer to Pension": safe_col("person1_transfer_to_pension"),
-            "P2 Transfer to Pension": safe_col("person2_transfer_to_pension"),
             "P1 Excess Retained in Accum": safe_col("person1_excess_retained_in_accumulation"),
-            "P2 Excess Retained in Accum": safe_col("person2_excess_retained_in_accumulation"),
             "P1 Opening Accum": safe_col("opening_person1_accum_super_balance"),
             "P1 Opening Pension": safe_col("opening_person1_pension_super_balance"),
-            "P2 Opening Accum": safe_col("opening_person2_accum_super_balance"),
-            "P2 Opening Pension": safe_col("opening_person2_pension_super_balance"),
             "P1 Net Super Contribution": safe_col("person1_total_net_super_contribution"),
-            "P2 Net Super Contribution": safe_col("person2_total_net_super_contribution"),
             "P1 Ending Accum": safe_col("ending_person1_accum_super_balance"),
             "P1 Ending Pension": safe_col("ending_person1_pension_super_balance"),
-            "P2 Ending Accum": safe_col("ending_person2_accum_super_balance"),
-            "P2 Ending Pension": safe_col("ending_person2_pension_super_balance"),
             "P1 Min Pension Drawdown": safe_col("person1_min_pension_drawdown"),
-            "P2 Min Pension Drawdown": safe_col("person2_min_pension_drawdown"),
             "P1 Extra Pension Withdrawal": safe_col("person1_extra_pension_withdrawal"),
-            "P2 Extra Pension Withdrawal": safe_col("person2_extra_pension_withdrawal"),
             "P1 Pension Earnings Tax": safe_col("person1_pension_earnings_tax"),
-            "P2 Pension Earnings Tax": safe_col("person2_pension_earnings_tax"),
             "P1 Super Realised CGT": safe_col("person1_super_realised_capital_gain"),
-            "P2 Super Realised CGT": safe_col("person2_super_realised_capital_gain"),
             "Super Withdrawal CGT Tax": safe_col("total_super_withdrawal_cgt_tax"),
             "Total Super Earnings Tax": safe_col("total_super_earnings_tax"),
         }
     )
+
+    if not is_one_person_inputs(inputs):
+        insert_after = list(debug_df.columns).index("P1 Has Started Pension") + 1
+        debug_df.insert(insert_after, "P2 Started Pension This Year", safe_col("person2_started_pension_this_year"))
+        debug_df.insert(insert_after + 1, "P2 Has Started Pension", safe_col("person2_has_started_pension"))
+        debug_df["P2 Requested Transfer"] = safe_col("person2_requested_transfer_amount")
+        debug_df["P2 Available Cap Space"] = safe_col("person2_available_cap_space")
+        debug_df["P2 Transfer to Pension"] = safe_col("person2_transfer_to_pension")
+        debug_df["P2 Excess Retained in Accum"] = safe_col("person2_excess_retained_in_accumulation")
+        debug_df["P2 Opening Accum"] = safe_col("opening_person2_accum_super_balance")
+        debug_df["P2 Opening Pension"] = safe_col("opening_person2_pension_super_balance")
+        debug_df["P2 Net Super Contribution"] = safe_col("person2_total_net_super_contribution")
+        debug_df["P2 Ending Accum"] = safe_col("ending_person2_accum_super_balance")
+        debug_df["P2 Ending Pension"] = safe_col("ending_person2_pension_super_balance")
+        debug_df["P2 Min Pension Drawdown"] = safe_col("person2_min_pension_drawdown")
+        debug_df["P2 Extra Pension Withdrawal"] = safe_col("person2_extra_pension_withdrawal")
+        debug_df["P2 Pension Earnings Tax"] = safe_col("person2_pension_earnings_tax")
+        debug_df["P2 Super Realised CGT"] = safe_col("person2_super_realised_capital_gain")
 
     return debug_df
 
@@ -1442,19 +1454,31 @@ elif active_input_section == "projection":
             help=t("How many financial years to project forward.", "向前预测多少个财政年度。"),
         )
     with col3:
-        retirement_spending_trigger = st.selectbox(
-            t("Retirement Spending Trigger", "退休支出触发条件"),
-            options=[
-                t("Both Retired", "双方都退休"),
-                t("Either Retired", "任一方退休"),
-            ],
-            index=0 if st.session_state.retirement_spending_trigger in ["Both Retired", "双方都退休"] else 1,
-        )
-
-        if retirement_spending_trigger == t("Both Retired", "双方都退休"):
-            retirement_spending_trigger = "Both Retired"
-        else:
+        if is_one_person_mode:
             retirement_spending_trigger = "Either Retired"
+            st.text_input(
+                t("Retirement Spending Trigger", "退休支出触发条件"),
+                value=t("Person 1 Retired", "人物 1 退休后触发"),
+                disabled=True,
+                help=t(
+                    "In one-person mode the retirement spending trigger is always based on Person 1 only.",
+                    "单人模式下，退休支出触发条件始终只基于 Person 1。",
+                ),
+            )
+        else:
+            retirement_spending_trigger = st.selectbox(
+                t("Retirement Spending Trigger", "退休支出触发条件"),
+                options=[
+                    t("Both Retired", "双方都退休"),
+                    t("Either Retired", "任一方退休"),
+                ],
+                index=0 if st.session_state.retirement_spending_trigger in ["Both Retired", "双方都退休"] else 1,
+            )
+
+            if retirement_spending_trigger == t("Both Retired", "双方都退休"):
+                retirement_spending_trigger = "Both Retired"
+            else:
+                retirement_spending_trigger = "Either Retired"
 
 elif active_input_section == "person1":
     st.subheader(t("Person 1", "人物 1"))
@@ -1875,57 +1899,72 @@ if is_one_person_mode:
     person2_transfer_balance_cap = 0.0
     person2_annual_income = 0.0
     non_super_ownership_person1 = 100.0
+    retirement_spending_trigger = "Either Retired"
     if not contribution_events_df.empty:
         contribution_events_df = contribution_events_df[contribution_events_df["person"] != "Person 2"].reset_index(drop=True)
+
+    st.session_state.person2_name = ""
+    st.session_state.person2_current_age = 0
+    st.session_state.person2_retirement_age = 0
+    st.session_state.person2_pension_start_age = 0
+    st.session_state.person2_accum_super_balance = 0.0
+    st.session_state.person2_pension_super_balance = 0.0
+    st.session_state.person2_accum_super_cost_base = 0.0
+    st.session_state.person2_pension_super_cost_base = 0.0
+    st.session_state.person2_transfer_balance_cap = 0.0
+    st.session_state.person2_annual_income = 0.0
+    st.session_state.non_super_ownership_person1_pct = 100.0
+    st.session_state.retirement_spending_trigger = "Either Retired"
+    st.session_state.contribution_events_df = contribution_events_df.copy()
 
 # ============================================================
 # SECTION: BASE INPUT MAP
 # ============================================================
 
 base_inputs = {
-    "report_title": report_title,
-    "person1_name": person1_name,
-    "person2_name": person2_name,
-    "start_financial_year": int(start_financial_year),
-    "projection_years": int(projection_years),
-    "retirement_spending_trigger": retirement_spending_trigger,
-    "household_mode": household_mode,
-    "person1_current_age": int(person1_current_age),
-    "person2_current_age": int(person2_current_age),
-    "person1_retirement_age": int(person1_retirement_age),
-    "person2_retirement_age": int(person2_retirement_age),
-    "person1_pension_start_age": int(person1_pension_start_age),
-    "person2_pension_start_age": int(person2_pension_start_age),
-    "person1_accum_super_balance": person1_accum_super_balance,
-    "person1_pension_super_balance": person1_pension_super_balance,
-    "person2_accum_super_balance": person2_accum_super_balance,
-    "person2_pension_super_balance": person2_pension_super_balance,
-    "person1_transfer_balance_cap": person1_transfer_balance_cap,
-    "person2_transfer_balance_cap": person2_transfer_balance_cap,
-    "non_super_balance": non_super_balance,
-    "non_super_cost_base": non_super_cost_base,
-    "person1_annual_income": person1_annual_income,
-    "person2_annual_income": person2_annual_income,
-    "annual_living_expenses": annual_living_expenses,
-    "retirement_spending": retirement_spending,
-    "non_super_ownership_person1": non_super_ownership_person1 / 100.0,
-    "cgt_discount_rate": cgt_discount_rate,
-    "inflation_rate": inflation_rate,
-    "super_income_return_mean": super_income_return_mean,
-    "super_income_return_std": super_income_return_std,
-    "super_capital_return_mean": super_capital_return_mean,
-    "super_capital_return_std": super_capital_return_std,
-    "non_super_income_return_mean": non_super_income_return_mean,
-    "non_super_income_return_std": non_super_income_return_std,
-    "non_super_capital_return_mean": non_super_capital_return_mean,
-    "non_super_capital_return_std": non_super_capital_return_std,
-    "number_of_simulations": int(number_of_simulations),
+    "report_title": st.session_state.report_title,
+    "person1_name": st.session_state.person1_name,
+    "person2_name": "" if is_one_person_mode else st.session_state.person2_name,
+    "start_financial_year": int(st.session_state.start_financial_year),
+    "projection_years": int(st.session_state.projection_years),
+    "retirement_spending_trigger": "Either Retired" if is_one_person_mode else st.session_state.retirement_spending_trigger,
+    "household_mode": st.session_state.household_mode,
+    "person1_current_age": int(st.session_state.person1_current_age),
+    "person2_current_age": 0 if is_one_person_mode else int(st.session_state.person2_current_age),
+    "person1_retirement_age": int(st.session_state.person1_retirement_age),
+    "person2_retirement_age": 0 if is_one_person_mode else int(st.session_state.person2_retirement_age),
+    "person1_pension_start_age": int(st.session_state.person1_pension_start_age),
+    "person2_pension_start_age": 0 if is_one_person_mode else int(st.session_state.person2_pension_start_age),
+    "person1_accum_super_balance": float(st.session_state.person1_accum_super_balance),
+    "person1_pension_super_balance": float(st.session_state.person1_pension_super_balance),
+    "person2_accum_super_balance": 0.0 if is_one_person_mode else float(st.session_state.person2_accum_super_balance),
+    "person2_pension_super_balance": 0.0 if is_one_person_mode else float(st.session_state.person2_pension_super_balance),
+    "person1_transfer_balance_cap": float(st.session_state.person1_transfer_balance_cap),
+    "person2_transfer_balance_cap": 0.0 if is_one_person_mode else float(st.session_state.person2_transfer_balance_cap),
+    "non_super_balance": float(st.session_state.non_super_balance),
+    "non_super_cost_base": float(st.session_state.non_super_cost_base),
+    "person1_annual_income": float(st.session_state.person1_annual_income),
+    "person2_annual_income": 0.0 if is_one_person_mode else float(st.session_state.person2_annual_income),
+    "annual_living_expenses": float(st.session_state.annual_living_expenses),
+    "retirement_spending": float(st.session_state.retirement_spending),
+    "non_super_ownership_person1": 1.0 if is_one_person_mode else float(st.session_state.non_super_ownership_person1_pct) / 100.0,
+    "cgt_discount_rate": float(st.session_state.cgt_discount_rate),
+    "inflation_rate": float(st.session_state.inflation_rate),
+    "super_income_return_mean": float(st.session_state.super_income_return_mean),
+    "super_income_return_std": float(st.session_state.super_income_return_std),
+    "super_capital_return_mean": float(st.session_state.super_capital_return_mean),
+    "super_capital_return_std": float(st.session_state.super_capital_return_std),
+    "non_super_income_return_mean": float(st.session_state.non_super_income_return_mean),
+    "non_super_income_return_std": float(st.session_state.non_super_income_return_std),
+    "non_super_capital_return_mean": float(st.session_state.non_super_capital_return_mean),
+    "non_super_capital_return_std": float(st.session_state.non_super_capital_return_std),
+    "number_of_simulations": int(st.session_state.number_of_simulations),
     "assumption_preset": preset_choice,
     "contribution_events": contribution_events_to_records(contribution_events_df, household_mode=household_mode),
-    "person1_accum_super_cost_base": person1_accum_super_cost_base,
-    "person1_pension_super_cost_base": person1_pension_super_cost_base,
-    "person2_accum_super_cost_base": person2_accum_super_cost_base,
-    "person2_pension_super_cost_base": person2_pension_super_cost_base,
+    "person1_accum_super_cost_base": float(st.session_state.person1_accum_super_cost_base),
+    "person1_pension_super_cost_base": float(st.session_state.person1_pension_super_cost_base),
+    "person2_accum_super_cost_base": 0.0 if is_one_person_mode else float(st.session_state.person2_accum_super_cost_base),
+    "person2_pension_super_cost_base": 0.0 if is_one_person_mode else float(st.session_state.person2_pension_super_cost_base),
 }
 
 render_live_input_feedback(base_inputs)
@@ -2085,6 +2124,9 @@ if active_result_bundle is not None:
     display_percentile_df = convert_percentile_df_for_value_mode(selected_result["percentile_df"], selected_result["inputs"], value_mode)
     display_summary_df = convert_summary_df_for_value_mode(selected_result["summary_df"], selected_result["inputs"], value_mode)
 
+    if is_one_person_inputs(selected_result["inputs"]):
+        st.info(t("This result is a single-person projection. Person 2 is fully excluded from inputs, calculations, charts, tables, and exports.", "当前结果为单人预测。Person 2 已从输入、计算、图表、表格和导出中完全排除。"))
+
     selected_success_rate = selected_result["success_rate"]
     selected_median_final_wealth = display_summary_df["final_wealth"].median()
     selected_p10_final_wealth = display_summary_df["final_wealth"].quantile(0.10)
@@ -2103,7 +2145,7 @@ if active_result_bundle is not None:
         bottom_col2.metric(t("P90 Final Wealth", "P90 最终财富"), f"${selected_p90_final_wealth:,.0f}")
         bottom_col3.metric(t("Spread (P90 - P10)", "区间差值（P90 - P10）"), f"${selected_p90_final_wealth - selected_p10_final_wealth:,.0f}")
 
-        missing_validation_cols = get_missing_validation_columns(display_det_df)
+        missing_validation_cols = get_missing_validation_columns(display_det_df, selected_result["inputs"])
         if missing_validation_cols:
             st.warning(t("Validation table is using fallback zeros for missing columns.", "验证表对缺失栏位使用了回退零值。"))
             st.caption(", ".join(missing_validation_cols))
@@ -2122,7 +2164,7 @@ if active_result_bundle is not None:
             },
         )
 
-        pension_tax_free_summary_df = build_pension_tax_free_summary_df(display_det_df)
+        pension_tax_free_summary_df = build_pension_tax_free_summary_df(display_det_df, selected_result["inputs"])
         st.subheader(t("Pension Tax-Free Validation Summary", "退休金免税验证摘要"))
         st.dataframe(
             pension_tax_free_summary_df,
@@ -2133,7 +2175,7 @@ if active_result_bundle is not None:
             },
         )
 
-        debug_df = build_adviser_debug_df(display_det_df)
+        debug_df = build_adviser_debug_df(display_det_df, selected_result["inputs"])
         st.subheader(t("Adviser Debug Table", "顾问调试表"))
         st.dataframe(
             debug_df,
@@ -2175,7 +2217,7 @@ if active_result_bundle is not None:
             },
         )
 
-        cgt_validation_df = build_cgt_validation_df(display_det_df)
+        cgt_validation_df = build_cgt_validation_df(display_det_df, selected_result["inputs"])
         with st.expander(t("Detailed CGT / Pension Validation Table", "详细 CGT / 退休金验证表"), expanded=False):
             st.dataframe(
                 cgt_validation_df,

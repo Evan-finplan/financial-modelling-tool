@@ -16,6 +16,7 @@ inputs = {
     "start_financial_year": 2027,
     "projection_years": 40,
     "retirement_spending_trigger": "Both Retired",
+    "household_mode": "Two People",
 
     "person1_current_age": 45,
     "person2_current_age": 43,
