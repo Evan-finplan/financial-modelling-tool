@@ -131,8 +131,11 @@ def percentage_text_input(label, value, key, decimals=0, help_text=None):
 # SECTION: CONTRIBUTION EVENT HELPERS
 # ============================================================
 
-def contribution_events_to_records(events_df):
-    clean_df = normalise_contribution_events(events_df)
+def contribution_events_to_records(events_df, household_mode="Two People"):
+    clean_df = normalise_contribution_events(
+        events_df,
+        household_mode=household_mode,
+    )
     if clean_df.empty:
         return []
     return clean_df.to_dict(orient="records")
