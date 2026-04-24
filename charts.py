@@ -12,6 +12,15 @@ def _person_label(inputs, key, fallback):
     return name if name else fallback
 
 
+def _is_chinese_chart(inputs):
+    language_value = str(inputs.get("ui_language", ""))
+    return "中文" in language_value or "CN" in language_value.upper()
+
+
+def _chart_text(inputs, en, zh):
+    return zh if _is_chinese_chart(inputs) else en
+
+
 def _add_lifecycle_markers(fig, inputs):
     start_fy_end = int(str(inputs["start_financial_year"]).replace("FY", ""))
     one_person_mode = str(inputs.get("household_mode", "Two People")) == "One Person"
@@ -19,15 +28,18 @@ def _add_lifecycle_markers(fig, inputs):
     p1_label = _person_label(inputs, "person1_name", "P1")
     p2_label = _person_label(inputs, "person2_name", "P2")
 
+    retirement_label = _chart_text(inputs, "Retirement", "退休")
+    pension_start_label = _chart_text(inputs, "Pension Start", "退休金开始")
+
     raw_markers = [
-        (start_fy_end + (inputs["person1_retirement_age"] - inputs["person1_current_age"]), f"{p1_label} Retirement"),
-        (start_fy_end + (inputs["person1_pension_start_age"] - inputs["person1_current_age"]), f"{p1_label} Pension Start"),
+        (start_fy_end + (inputs["person1_retirement_age"] - inputs["person1_current_age"]), f"{p1_label} {retirement_label}"),
+        (start_fy_end + (inputs["person1_pension_start_age"] - inputs["person1_current_age"]), f"{p1_label} {pension_start_label}"),
     ]
 
     if not one_person_mode:
         raw_markers.extend([
-            (start_fy_end + (inputs["person2_retirement_age"] - inputs["person2_current_age"]), f"{p2_label} Retirement"),
-            (start_fy_end + (inputs["person2_pension_start_age"] - inputs["person2_current_age"]), f"{p2_label} Pension Start"),
+            (start_fy_end + (inputs["person2_retirement_age"] - inputs["person2_current_age"]), f"{p2_label} {retirement_label}"),
+            (start_fy_end + (inputs["person2_pension_start_age"] - inputs["person2_current_age"]), f"{p2_label} {pension_start_label}"),
         ])
 
     year_groups = {}
@@ -82,14 +94,14 @@ def create_deterministic_wealth_chart_comparison(det_scenarios_df, inputs):
         x="financial_year_end",
         y="total_wealth",
         color="scenario",
-        title="Deterministic Total Wealth Projection",
+        title=_chart_text(inputs, "Deterministic Total Wealth Projection", "确定性总财富预测"),
     )
 
     fig = _add_lifecycle_markers(fig, inputs)
 
     fig.update_layout(
-        xaxis_title="Financial Year",
-        yaxis_title="Total Wealth",
+        xaxis_title=_chart_text(inputs, "Financial Year", "财政年度"),
+        yaxis_title=_chart_text(inputs, "Total Wealth", "总财富"),
         hovermode="x unified",
     )
 
@@ -142,8 +154,8 @@ def create_percentile_paths_chart(percentile_df, inputs, title_text):
 
     fig.update_layout(
         title=title_text,
-        xaxis_title="Financial Year",
-        yaxis_title="Total Wealth",
+        xaxis_title=_chart_text(inputs, "Financial Year", "财政年度"),
+        yaxis_title=_chart_text(inputs, "Total Wealth", "总财富"),
         hovermode="x unified",
     )
 
@@ -167,8 +179,8 @@ def create_failure_probability_chart(failure_prob_df, inputs, title_text):
 
     fig.update_layout(
         title=title_text,
-        xaxis_title="Financial Year",
-        yaxis_title="Failure Probability",
+        xaxis_title=_chart_text(inputs, "Financial Year", "财政年度"),
+        yaxis_title=_chart_text(inputs, "Failure Probability", "资金耗尽概率"),
         hovermode="x unified",
     )
     fig.update_yaxes(tickformat=".0%")
@@ -239,8 +251,8 @@ def create_tax_breakdown_chart(det_df, inputs, title_text):
     fig.update_layout(
         title=title_text,
         barmode="stack",
-        xaxis_title="Financial Year",
-        yaxis_title="Annual Tax",
+        xaxis_title=_chart_text(inputs, "Financial Year", "财政年度"),
+        yaxis_title=_chart_text(inputs, "Annual Tax", "年度税款"),
         hovermode="x unified",
     )
 
@@ -286,8 +298,8 @@ def create_income_vs_spending_chart(det_df, inputs, title_text):
 
     fig.update_layout(
         title=title_text,
-        xaxis_title="Financial Year",
-        yaxis_title="Annual Amount",
+        xaxis_title=_chart_text(inputs, "Financial Year", "财政年度"),
+        yaxis_title=_chart_text(inputs, "Annual Amount", "年度金额"),
         hovermode="x unified",
     )
 
@@ -314,8 +326,8 @@ def create_total_tax_paid_chart(det_df, inputs, title_text):
 
     fig.update_layout(
         title=title_text,
-        xaxis_title="Financial Year",
-        yaxis_title="Annual Tax",
+        xaxis_title=_chart_text(inputs, "Financial Year", "财政年度"),
+        yaxis_title=_chart_text(inputs, "Annual Tax", "年度税款"),
         hovermode="x unified",
     )
 

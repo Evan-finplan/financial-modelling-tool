@@ -1929,6 +1929,7 @@ base_inputs = {
     "projection_years": int(st.session_state.projection_years),
     "retirement_spending_trigger": "Either Retired" if is_one_person_mode else st.session_state.retirement_spending_trigger,
     "household_mode": st.session_state.household_mode,
+    "ui_language": st.session_state.ui_language,
     "person1_current_age": int(st.session_state.person1_current_age),
     "person2_current_age": 0 if is_one_person_mode else int(st.session_state.person2_current_age),
     "person1_retirement_age": int(st.session_state.person1_retirement_age),
@@ -2072,47 +2073,25 @@ if active_result_bundle is not None:
     else:
         st.caption(t(f"Showing saved snapshot: {active_name_display}", f"当前显示：已保存快照：{active_name_display}"))
 
-    render_saved_result_comparison_section(st.session_state.get("saved_result_sets", {}), value_mode)
-
-    render_assumption_details(assumption_details_df)
-    render_warning_sections(input_warnings_by_scenario, output_warnings_by_scenario, view_mode)
-
     comparison_rows = []
     det_scenarios_df_list = []
-
     for scenario_name, result in comparison_results.items():
-        comparison_rows.append(
-            {
-                "scenario": scenario_name,
-                "success_rate": result["success_rate"],
-                "median_final_wealth": result["median_final_wealth"],
-                "p10_final_wealth": result["p10_final_wealth"],
-                "p90_final_wealth": result["p90_final_wealth"],
-            }
-        )
-
+        comparison_rows.append({
+            "scenario": scenario_name,
+            "success_rate": result["success_rate"],
+            "median_final_wealth": result["median_final_wealth"],
+            "p10_final_wealth": result["p10_final_wealth"],
+            "p90_final_wealth": result["p90_final_wealth"],
+        })
         temp_det_df = result["det_df"].copy()
         temp_det_df["scenario"] = scenario_name
         det_scenarios_df_list.append(temp_det_df)
 
-    comparison_df = pd.DataFrame(comparison_rows)
+    comparison_df = format_comparison_df(pd.DataFrame(comparison_rows))
     common_inputs = next(iter(comparison_results.values()))["inputs"]
-    comparison_df = format_comparison_df(comparison_df)
     comparison_df = convert_comparison_df_for_value_mode(comparison_df, common_inputs, value_mode)
     det_scenarios_df = pd.concat(det_scenarios_df_list, ignore_index=True)
     det_scenarios_df = convert_det_df_for_value_mode(det_scenarios_df, common_inputs, value_mode)
-
-    st.subheader(t("Scenario Comparison Summary", "情景比较摘要"))
-    st.dataframe(
-        comparison_df[["scenario", "success_rate_label", "median_final_wealth_label", "p10_final_wealth_label", "p90_final_wealth_label"]],
-        use_container_width=True,
-    )
-
-    success_fig = create_success_rate_comparison_chart(comparison_df)
-    st.plotly_chart(success_fig, use_container_width=True, key="success_rate_comparison")
-
-    median_fig = create_median_wealth_comparison_chart(comparison_df)
-    st.plotly_chart(median_fig, use_container_width=True, key="median_wealth_comparison")
 
     selected_scenario = st.selectbox(
         t("Select Scenario", "选择情景"),
@@ -2132,14 +2111,34 @@ if active_result_bundle is not None:
     selected_p10_final_wealth = display_summary_df["final_wealth"].quantile(0.10)
     selected_p90_final_wealth = display_summary_df["final_wealth"].quantile(0.90)
 
+    det_single_compare_df = display_det_df.copy()
+    det_single_compare_df["scenario"] = selected_scenario
+
     if view_mode == t("Adviser View", "顾问视图"):
+        render_saved_result_comparison_section(st.session_state.get("saved_result_sets", {}), value_mode)
+        render_assumption_details(assumption_details_df)
+        render_warning_sections(input_warnings_by_scenario, output_warnings_by_scenario, view_mode)
+
+        st.subheader(t("Scenario Comparison Summary", "情景比较摘要"))
+        st.dataframe(
+            comparison_df[["scenario", "success_rate_label", "median_final_wealth_label", "p10_final_wealth_label", "p90_final_wealth_label"]],
+            use_container_width=True,
+        )
+
+        success_fig = create_success_rate_comparison_chart(comparison_df)
+        success_fig.update_layout(title=t("Success Rate by Scenario", "各情景成功率"), xaxis_title=t("Scenario", "情景"), yaxis_title=t("Success Rate", "成功率"))
+        st.plotly_chart(success_fig, use_container_width=True, key="success_rate_comparison")
+
+        median_fig = create_median_wealth_comparison_chart(comparison_df)
+        median_fig.update_layout(title=t("Median Final Wealth by Scenario", "各情景最终财富中位数"), xaxis_title=t("Scenario", "情景"), yaxis_title=t("Median Final Wealth", "最终财富中位数"))
+        st.plotly_chart(median_fig, use_container_width=True, key="median_wealth_comparison")
+
         st.subheader(t(f"Adviser Summary - {selected_scenario}", f"顾问摘要 - {selected_scenario}"))
         st.info(t("Adviser Note: Outputs are indicative only and should be reviewed in the context of client objectives, risk profile, and current legislation before forming advice.", "顾问提示：本输出仅供指示参考，在形成建议前应结合客户目标、风险承受能力及现行法规进行审阅。"))
 
         top_col1, top_col2 = st.columns(2)
-        top_col1.metric(t("Success Rate", "成功率"), f"{selected_result['success_rate']:.1%}")
+        top_col1.metric(t("Success Rate", "成功率"), f"{selected_success_rate:.1%}")
         top_col2.metric(t("Median Final Wealth", "最终财富中位数"), f"${selected_median_final_wealth:,.0f}")
-
         bottom_col1, bottom_col2, bottom_col3 = st.columns(3)
         bottom_col1.metric(t("P10 Final Wealth", "P10 最终财富"), f"${selected_p10_final_wealth:,.0f}")
         bottom_col2.metric(t("P90 Final Wealth", "P90 最终财富"), f"${selected_p90_final_wealth:,.0f}")
@@ -2150,180 +2149,94 @@ if active_result_bundle is not None:
             st.warning(t("Validation table is using fallback zeros for missing columns.", "验证表对缺失栏位使用了回退零值。"))
             st.caption(", ".join(missing_validation_cols))
 
+        st.subheader(t("Adviser Charts", "顾问图表"))
+
+        det_all_fig = create_deterministic_wealth_chart_comparison(det_scenarios_df, common_inputs)
+        det_all_fig.update_layout(title=t("Deterministic Total Wealth Projection", "确定性总财富预测"), xaxis_title=t("Financial Year", "财政年度"), yaxis_title=t("Total Wealth", "总财富"))
+        st.plotly_chart(det_all_fig, use_container_width=True, key=chart_key("deterministic_all", selected_scenario, view_mode, "adviser"))
+
+        percentile_fig = create_percentile_paths_chart(display_percentile_df, selected_result["inputs"], t(f"Monte Carlo Percentile Paths - {selected_scenario}", f"蒙特卡洛百分位路径 - {selected_scenario}"))
+        percentile_fig.update_layout(xaxis_title=t("Financial Year", "财政年度"), yaxis_title=t("Total Wealth", "总财富"))
+        st.plotly_chart(percentile_fig, use_container_width=True, key=chart_key("percentile", selected_scenario, view_mode, "adviser"))
+
+        failure_fig = create_failure_probability_chart(selected_result["failure_prob_df"], selected_result["inputs"], t(f"Cumulative Probability of Running Out of Money - {selected_scenario}", f"资金耗尽累计概率 - {selected_scenario}"))
+        failure_fig.update_layout(xaxis_title=t("Financial Year", "财政年度"), yaxis_title=t("Failure Probability", "资金耗尽概率"))
+        st.plotly_chart(failure_fig, use_container_width=True, key=chart_key("failure", selected_scenario, view_mode, "adviser"))
+
+        histogram_fig = create_histogram(display_summary_df, show_p10=True, show_p50=True, show_p90=True, title_text=t(f"Distribution of Final Wealth - {selected_scenario}", f"最终财富分布 - {selected_scenario}"))
+        histogram_fig.update_layout(xaxis_title=t("Final Wealth", "最终财富"), yaxis_title=t("Frequency", "次数"))
+        st.plotly_chart(histogram_fig, use_container_width=True, key=chart_key("histogram", selected_scenario, view_mode, "adviser"))
+
+        income_spending_fig = create_income_vs_spending_chart(display_det_df, selected_result["inputs"], t(f"Income vs Spending - {selected_scenario}", f"收入与支出 - {selected_scenario}"))
+        income_spending_fig.update_layout(xaxis_title=t("Financial Year", "财政年度"), yaxis_title=t("Annual Amount", "年度金额"))
+        st.plotly_chart(income_spending_fig, use_container_width=True, key=chart_key("income_spending", selected_scenario, view_mode, "adviser"))
+
+        tax_breakdown_fig = create_tax_breakdown_chart(display_det_df, selected_result["inputs"], t(f"Tax Breakdown - {selected_scenario}", f"税务明细 - {selected_scenario}"))
+        tax_breakdown_fig.update_layout(xaxis_title=t("Financial Year", "财政年度"), yaxis_title=t("Annual Tax", "年度税款"))
+        st.plotly_chart(tax_breakdown_fig, use_container_width=True, key=chart_key("tax_breakdown", selected_scenario, view_mode, "adviser"))
+
+        total_tax_fig = create_total_tax_paid_chart(display_det_df, selected_result["inputs"], t(f"Total Tax Paid - {selected_scenario}", f"总税款 - {selected_scenario}"))
+        total_tax_fig.update_layout(xaxis_title=t("Financial Year", "财政年度"), yaxis_title=t("Annual Tax", "年度税款"))
+        st.plotly_chart(total_tax_fig, use_container_width=True, key=chart_key("total_tax", selected_scenario, view_mode, "adviser"))
+
         adviser_cashflow_df = build_adviser_cashflow_df(display_det_df)
         st.subheader(t("Adviser Cashflow Summary", "顾问现金流摘要"))
-        st.dataframe(
-            adviser_cashflow_df,
-            use_container_width=True,
-            column_config={
-                "Year": st.column_config.NumberColumn("Year", format="%d"),
-                "Withdrawal": st.column_config.NumberColumn("Withdrawal", format="$%.0f"),
-                "CGT": st.column_config.NumberColumn("CGT", format="$%.0f"),
-                "Tax": st.column_config.NumberColumn("Tax", format="$%.0f"),
-                "Net Cash": st.column_config.NumberColumn("Net Cash", format="$%.0f"),
-            },
-        )
+        st.dataframe(adviser_cashflow_df, use_container_width=True)
 
         pension_tax_free_summary_df = build_pension_tax_free_summary_df(display_det_df, selected_result["inputs"])
         st.subheader(t("Pension Tax-Free Validation Summary", "退休金免税验证摘要"))
-        st.dataframe(
-            pension_tax_free_summary_df,
-            use_container_width=True,
-            column_config={
-                "check": st.column_config.TextColumn("Check"),
-                "value": st.column_config.NumberColumn("Value", format="$%.0f"),
-            },
-        )
+        st.dataframe(pension_tax_free_summary_df, use_container_width=True)
 
         debug_df = build_adviser_debug_df(display_det_df, selected_result["inputs"])
         st.subheader(t("Adviser Debug Table", "顾问调试表"))
-        st.dataframe(
-            debug_df,
-            use_container_width=True,
-            column_config={
-                "Year": st.column_config.NumberColumn("Year", format="%d"),
-                "P1 Started Pension This Year": st.column_config.CheckboxColumn("P1 Started Pension This Year"),
-                "P1 Has Started Pension": st.column_config.CheckboxColumn("P1 Has Started Pension"),
-                "P2 Started Pension This Year": st.column_config.CheckboxColumn("P2 Started Pension This Year"),
-                "P2 Has Started Pension": st.column_config.CheckboxColumn("P2 Has Started Pension"),
-                "P1 Requested Transfer": st.column_config.NumberColumn("P1 Requested Transfer", format="$%.0f"),
-                "P2 Requested Transfer": st.column_config.NumberColumn("P2 Requested Transfer", format="$%.0f"),
-                "P1 Available Cap Space": st.column_config.NumberColumn("P1 Available Cap Space", format="$%.0f"),
-                "P2 Available Cap Space": st.column_config.NumberColumn("P2 Available Cap Space", format="$%.0f"),
-                "P1 Transfer to Pension": st.column_config.NumberColumn("P1 Transfer to Pension", format="$%.0f"),
-                "P2 Transfer to Pension": st.column_config.NumberColumn("P2 Transfer to Pension", format="$%.0f"),
-                "P1 Excess Retained in Accum": st.column_config.NumberColumn("P1 Excess Retained in Accum", format="$%.0f"),
-                "P2 Excess Retained in Accum": st.column_config.NumberColumn("P2 Excess Retained in Accum", format="$%.0f"),
-                "P1 Opening Accum": st.column_config.NumberColumn("P1 Opening Accum", format="$%.0f"),
-                "P1 Opening Pension": st.column_config.NumberColumn("P1 Opening Pension", format="$%.0f"),
-                "P2 Opening Accum": st.column_config.NumberColumn("P2 Opening Accum", format="$%.0f"),
-                "P2 Opening Pension": st.column_config.NumberColumn("P2 Opening Pension", format="$%.0f"),
-                "P1 Net Super Contribution": st.column_config.NumberColumn("P1 Net Super Contribution", format="$%.0f"),
-                "P2 Net Super Contribution": st.column_config.NumberColumn("P2 Net Super Contribution", format="$%.0f"),
-                "P1 Ending Accum": st.column_config.NumberColumn("P1 Ending Accum", format="$%.0f"),
-                "P1 Ending Pension": st.column_config.NumberColumn("P1 Ending Pension", format="$%.0f"),
-                "P2 Ending Accum": st.column_config.NumberColumn("P2 Ending Accum", format="$%.0f"),
-                "P2 Ending Pension": st.column_config.NumberColumn("P2 Ending Pension", format="$%.0f"),
-                "P1 Min Pension Drawdown": st.column_config.NumberColumn("P1 Min Pension Drawdown", format="$%.0f"),
-                "P2 Min Pension Drawdown": st.column_config.NumberColumn("P2 Min Pension Drawdown", format="$%.0f"),
-                "P1 Extra Pension Withdrawal": st.column_config.NumberColumn("P1 Extra Pension Withdrawal", format="$%.0f"),
-                "P2 Extra Pension Withdrawal": st.column_config.NumberColumn("P2 Extra Pension Withdrawal", format="$%.0f"),
-                "P1 Pension Earnings Tax": st.column_config.NumberColumn("P1 Pension Earnings Tax", format="$%.0f"),
-                "P2 Pension Earnings Tax": st.column_config.NumberColumn("P2 Pension Earnings Tax", format="$%.0f"),
-                "P1 Super Realised CGT": st.column_config.NumberColumn("P1 Super Realised CGT", format="$%.0f"),
-                "P2 Super Realised CGT": st.column_config.NumberColumn("P2 Super Realised CGT", format="$%.0f"),
-                "Super Withdrawal CGT Tax": st.column_config.NumberColumn("Super Withdrawal CGT Tax", format="$%.0f"),
-                "Total Super Earnings Tax": st.column_config.NumberColumn("Total Super Earnings Tax", format="$%.0f"),
-            },
-        )
+        st.dataframe(debug_df, use_container_width=True)
 
         cgt_validation_df = build_cgt_validation_df(display_det_df, selected_result["inputs"])
         with st.expander(t("Detailed CGT / Pension Validation Table", "详细 CGT / 退休金验证表"), expanded=False):
-            st.dataframe(
-                cgt_validation_df,
-                use_container_width=True,
-                column_config={
-                    "Year": st.column_config.NumberColumn("Year", format="%d"),
-                    "P1 Age": st.column_config.NumberColumn("P1 Age", format="%d"),
-                    "P2 Age": st.column_config.NumberColumn("P2 Age", format="%d"),
-                    "P1 Started Pension This Year": st.column_config.CheckboxColumn("P1 Started Pension This Year"),
-                    "P2 Started Pension This Year": st.column_config.CheckboxColumn("P2 Started Pension This Year"),
-                    "P1 Has Started Pension": st.column_config.CheckboxColumn("P1 Has Started Pension"),
-                    "P2 Has Started Pension": st.column_config.CheckboxColumn("P2 Has Started Pension"),
-                    "P1 Opening Accum Balance": st.column_config.NumberColumn("P1 Opening Accum Balance", format="$%.0f"),
-                    "P1 Opening Pension Balance": st.column_config.NumberColumn("P1 Opening Pension Balance", format="$%.0f"),
-                    "P2 Opening Accum Balance": st.column_config.NumberColumn("P2 Opening Accum Balance", format="$%.0f"),
-                    "P2 Opening Pension Balance": st.column_config.NumberColumn("P2 Opening Pension Balance", format="$%.0f"),
-                    "P1 Ending Accum Balance": st.column_config.NumberColumn("P1 Ending Accum Balance", format="$%.0f"),
-                    "P1 Ending Pension Balance": st.column_config.NumberColumn("P1 Ending Pension Balance", format="$%.0f"),
-                    "P2 Ending Accum Balance": st.column_config.NumberColumn("P2 Ending Accum Balance", format="$%.0f"),
-                    "P2 Ending Pension Balance": st.column_config.NumberColumn("P2 Ending Pension Balance", format="$%.0f"),
-                    "P1 Transfer to Pension": st.column_config.NumberColumn("P1 Transfer to Pension", format="$%.0f"),
-                    "P2 Transfer to Pension": st.column_config.NumberColumn("P2 Transfer to Pension", format="$%.0f"),
-                    "P1 Total Net Super Contribution": st.column_config.NumberColumn("P1 Total Net Super Contribution", format="$%.0f"),
-                    "P2 Total Net Super Contribution": st.column_config.NumberColumn("P2 Total Net Super Contribution", format="$%.0f"),
-                    "P1 Super Realised CGT": st.column_config.NumberColumn("P1 Super Realised CGT", format="$%.0f"),
-                    "P2 Super Realised CGT": st.column_config.NumberColumn("P2 Super Realised CGT", format="$%.0f"),
-                    "Super Withdrawal CGT Tax": st.column_config.NumberColumn("Super Withdrawal CGT Tax", format="$%.0f"),
-                    "P1 Pension Earnings Tax": st.column_config.NumberColumn("P1 Pension Earnings Tax", format="$%.0f"),
-                    "P2 Pension Earnings Tax": st.column_config.NumberColumn("P2 Pension Earnings Tax", format="$%.0f"),
-                    "Super Earnings Tax": st.column_config.NumberColumn("Super Earnings Tax", format="$%.0f"),
-                },
-            )
+            st.dataframe(cgt_validation_df, use_container_width=True)
+        with st.expander(t("Deterministic Projection Table", "确定性预测明细表"), expanded=False):
+            st.dataframe(display_det_df, use_container_width=True)
+        with st.expander(t("Monte Carlo Simulation Summary Table", "蒙特卡洛模拟摘要表"), expanded=False):
+            st.dataframe(display_summary_df, use_container_width=True)
+        with st.expander(t("Monte Carlo Percentile Table", "蒙特卡洛百分位表"), expanded=False):
+            st.dataframe(display_percentile_df, use_container_width=True)
+        with st.expander(t("Failure Probability Table", "资金耗尽概率表"), expanded=False):
+            st.dataframe(selected_result["failure_prob_df"], use_container_width=True)
 
-        tax_breakdown_fig = create_tax_breakdown_chart(display_det_df, selected_result["inputs"], f"Tax Breakdown - {selected_scenario}")
-        st.plotly_chart(tax_breakdown_fig, use_container_width=True, key=chart_key("tax_breakdown", selected_scenario, view_mode, "adviser"))
-
-        total_tax_fig = create_total_tax_paid_chart(display_det_df, selected_result["inputs"], f"Total Tax Paid - {selected_scenario}")
-        st.plotly_chart(total_tax_fig, use_container_width=True, key=chart_key("total_tax", selected_scenario, view_mode, "adviser"))
-
-        excel_file = dataframe_to_excel_bytes(
-            {
-                "input_summary": input_summary_df,
-                "assumption_details": assumption_details_df,
-                "contribution_schedule": contribution_schedule_export_df,
-                "deterministic_projection": display_det_df,
-                "simulation_summary": display_summary_df,
-                "percentile_table": display_percentile_df,
-                "failure_probability": selected_result["failure_prob_df"],
-                "adviser_cashflow_summary": adviser_cashflow_df,
-                "adviser_debug_table": debug_df,
-                "pension_tax_free_summary": pension_tax_free_summary_df,
-                "cgt_validation_detail": cgt_validation_df,
-            }
-        )
-
-        st.download_button(
-            label=t("Download Excel", "下载 Excel"),
-            data=excel_file,
-            file_name=build_export_filename(selected_result["inputs"].get("report_title", ""), "financial_projection", selected_scenario, "xlsx"),
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
+        excel_file = dataframe_to_excel_bytes({
+            "input_summary": input_summary_df,
+            "assumption_details": assumption_details_df,
+            "contribution_schedule": contribution_schedule_export_df,
+            "deterministic_projection": display_det_df,
+            "simulation_summary": display_summary_df,
+            "percentile_table": display_percentile_df,
+            "failure_probability": selected_result["failure_prob_df"],
+            "adviser_cashflow_summary": adviser_cashflow_df,
+            "adviser_debug_table": debug_df,
+            "pension_tax_free_summary": pension_tax_free_summary_df,
+            "cgt_validation_detail": cgt_validation_df,
+        })
+        st.download_button(label=t("Download Excel", "下载 Excel"), data=excel_file, file_name=build_export_filename(selected_result["inputs"].get("report_title", ""), "financial_projection", selected_scenario, "xlsx"), mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
     else:
         st.subheader(t(f"Client Summary - {selected_scenario}", f"客户摘要 - {selected_scenario}"))
-
         col1, col2, col3, col4 = st.columns(4)
-        col1.metric(t("Success Rate", "成功率"), f"{selected_result['success_rate']:.1%}")
+        col1.metric(t("Success Rate", "成功率"), f"{selected_success_rate:.1%}")
         col2.metric(t("Median Final Wealth", "最终财富中位数"), f"${selected_median_final_wealth:,.0f}")
         col3.metric(t("P10 Final Wealth", "P10 最终财富"), f"${selected_p10_final_wealth:,.0f}")
         col4.metric(t("P90 Final Wealth", "P90 最终财富"), f"${selected_p90_final_wealth:,.0f}")
 
-        det_single_df = display_det_df
-        det_single_compare_df = det_single_df.copy()
-        det_single_compare_df["scenario"] = selected_scenario
-
         det_fig = create_deterministic_wealth_chart_comparison(det_single_compare_df, selected_result["inputs"])
+        det_fig.update_layout(title=t("Deterministic Total Wealth Projection", "确定性总财富预测"), xaxis_title=t("Financial Year", "财政年度"), yaxis_title=t("Total Wealth", "总财富"))
         st.plotly_chart(det_fig, use_container_width=True, key=chart_key("deterministic", selected_scenario, view_mode, "client"))
 
-        percentile_fig = create_percentile_paths_chart(display_percentile_df, selected_result["inputs"], f"Monte Carlo Percentile Paths - {selected_scenario}")
+        percentile_fig = create_percentile_paths_chart(display_percentile_df, selected_result["inputs"], t(f"Monte Carlo Percentile Paths - {selected_scenario}", f"蒙特卡洛百分位路径 - {selected_scenario}"))
+        percentile_fig.update_layout(xaxis_title=t("Financial Year", "财政年度"), yaxis_title=t("Total Wealth", "总财富"))
         st.plotly_chart(percentile_fig, use_container_width=True, key=chart_key("percentile", selected_scenario, view_mode, "client"))
 
-        failure_fig = create_failure_probability_chart(selected_result["failure_prob_df"], selected_result["inputs"], f"Cumulative Probability of Running Out of Money - {selected_scenario}")
+        failure_fig = create_failure_probability_chart(selected_result["failure_prob_df"], selected_result["inputs"], t(f"Cumulative Probability of Running Out of Money - {selected_scenario}", f"资金耗尽累计概率 - {selected_scenario}"))
+        failure_fig.update_layout(xaxis_title=t("Financial Year", "财政年度"), yaxis_title=t("Failure Probability", "资金耗尽概率"))
         st.plotly_chart(failure_fig, use_container_width=True, key=chart_key("failure", selected_scenario, view_mode, "client"))
-
-        client_assumption_df = assumption_details_df[assumption_details_df["scenario"] == selected_scenario]
-        st.subheader(t("Selected Scenario Assumptions", "所选情景假设"))
-        st.dataframe(client_assumption_df, use_container_width=True)
-
-        excel_file = dataframe_to_excel_bytes(
-            {
-                "input_summary": input_summary_df,
-                "assumption_details": assumption_details_df,
-                "contribution_schedule": contribution_schedule_export_df,
-                "deterministic_projection": display_det_df,
-                "simulation_summary": display_summary_df,
-                "percentile_table": display_percentile_df,
-                "failure_probability": selected_result["failure_prob_df"],
-            }
-        )
-
-        st.download_button(
-            label=t("Download Excel", "下载 Excel"),
-            data=excel_file,
-            file_name=build_export_filename(selected_result["inputs"].get("report_title", ""), "financial_projection", selected_scenario, "xlsx"),
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
 
 else:
     st.info(t("Adjust the inputs above, then click Run Simulation in the sidebar. Saved snapshots can also be reopened from the sidebar.", "请先在上方区域调整输入，再点击侧边栏中的“运行模拟”。已保存快照也可以在侧边栏重新打开。"))
