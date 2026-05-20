@@ -2,16 +2,19 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+.Python
 
+.env
 .venv/
 venv/
 env/
 
-.vscode/
-.idea/
-
-.DS_Store
-
 .streamlit/secrets.toml
 
-*.log
+.DS_Store
+Thumbs.db
+
+.idea/
+.vscode/
+
+*.xlsx

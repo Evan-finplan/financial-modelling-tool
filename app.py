@@ -87,6 +87,228 @@ def build_export_filename(report_title, base_name, scenario_name, extension):
     return f"{title_part}_{base_part}_{scenario_part}_{date_part}.{extension}"
 
 
+# ============================================================
+# SECTION: EXCEL INPUT IMPORT / EXPORT HELPERS
+# ============================================================
+
+INPUT_EXCEL_FIELDS = [
+    "ui_language",
+    "value_mode",
+    "household_mode",
+    "assumption_preset",
+    "report_title",
+    "person1_name",
+    "person2_name",
+    "start_financial_year",
+    "projection_years",
+    "retirement_spending_trigger",
+    "person1_current_age",
+    "person2_current_age",
+    "person1_retirement_age",
+    "person2_retirement_age",
+    "person1_pension_start_age",
+    "person2_pension_start_age",
+    "person1_accum_super_balance",
+    "person1_pension_super_balance",
+    "person2_accum_super_balance",
+    "person2_pension_super_balance",
+    "person1_accum_super_cost_base",
+    "person1_pension_super_cost_base",
+    "person2_accum_super_cost_base",
+    "person2_pension_super_cost_base",
+    "person1_transfer_balance_cap",
+    "person2_transfer_balance_cap",
+    "person1_annual_income",
+    "person2_annual_income",
+    "non_super_balance",
+    "non_super_cost_base",
+    "annual_living_expenses",
+    "retirement_spending",
+    "non_super_ownership_person1_pct",
+    "cgt_discount_rate",
+    "super_income_return_mean",
+    "super_income_return_std",
+    "super_capital_return_mean",
+    "super_capital_return_std",
+    "non_super_income_return_mean",
+    "non_super_income_return_std",
+    "non_super_capital_return_mean",
+    "non_super_capital_return_std",
+    "inflation_rate",
+    "number_of_simulations",
+    "random_seed",
+]
+
+
+def _coerce_uploaded_input_value(field_name, value):
+    if pd.isna(value):
+        return "" if isinstance(defaults.get(field_name, ""), str) else defaults.get(field_name, value)
+
+    default_value = defaults.get(field_name, "")
+
+    if isinstance(default_value, bool):
+        return bool(value)
+    if isinstance(default_value, int) and not isinstance(default_value, bool):
+        return int(float(value))
+    if isinstance(default_value, float):
+        return float(value)
+
+    text_value = str(value).strip()
+
+    if field_name == "household_mode":
+        if text_value not in {"One Person", "Two People"}:
+            raise ValueError("household_mode must be 'One Person' or 'Two People'.")
+    if field_name == "value_mode":
+        if text_value not in {"Future Value", "Present Value"}:
+            raise ValueError("value_mode must be 'Future Value' or 'Present Value'.")
+    if field_name == "retirement_spending_trigger":
+        if text_value not in {"Both Retired", "Either Retired"}:
+            raise ValueError("retirement_spending_trigger must be 'Both Retired' or 'Either Retired'.")
+    if field_name == "assumption_preset":
+        if text_value not in {"Conservative", "Base Case", "Optimistic", "Custom"}:
+            raise ValueError("assumption_preset must be Conservative, Base Case, Optimistic, or Custom.")
+
+    return text_value
+
+
+def build_input_state_df_from_session_state():
+    rows = []
+    for field_name in INPUT_EXCEL_FIELDS:
+        rows.append({
+            "input_name": field_name,
+            "input_value": st.session_state.get(field_name, defaults.get(field_name, "")),
+            "notes": "Edit input_value only. Keep input_name unchanged.",
+        })
+    return pd.DataFrame(rows)
+
+
+def build_excel_input_workbook_bytes(include_current_values=True):
+    input_df = build_input_state_df_from_session_state() if include_current_values else pd.DataFrame([
+        {
+            "input_name": field_name,
+            "input_value": defaults.get(field_name, ""),
+            "notes": "Edit input_value only. Keep input_name unchanged.",
+        }
+        for field_name in INPUT_EXCEL_FIELDS
+    ])
+
+    contribution_df = st.session_state.get(
+        "contribution_events_df",
+        pd.DataFrame(columns=["financial_year", "person", "contribution_type", "amount"]),
+    ).copy() if include_current_values else pd.DataFrame(
+        columns=["financial_year", "person", "contribution_type", "amount"]
+    )
+
+    preset_df = st.session_state.get(
+        "preset_table_df",
+        get_default_preset_table_df(),
+    ).copy() if include_current_values else get_default_preset_table_df()
+
+    instructions_df = pd.DataFrame([
+        {"item": "inputs", "instruction": "Edit the input_value column. Do not rename input_name."},
+        {"item": "contribution_schedule", "instruction": "Optional. Use financial_year, person, contribution_type, amount."},
+        {"item": "preset_assumptions", "instruction": "Optional. Keep preset names and columns unchanged."},
+        {"item": "percentages", "instruction": "Use decimals for rate assumptions, e.g. 0.03 means 3%. non_super_ownership_person1_pct uses percent value, e.g. 100 means 100%."},
+        {"item": "household_mode", "instruction": "Use One Person or Two People."},
+    ])
+
+    return dataframe_to_excel_bytes({
+        "instructions": instructions_df,
+        "inputs": input_df,
+        "contribution_schedule": contribution_df,
+        "preset_assumptions": preset_df,
+    })
+
+
+def apply_uploaded_input_workbook(uploaded_file):
+    if uploaded_file is None:
+        return False, t("Please upload an Excel file first.", "请先上传一个 Excel 文件。")
+
+    try:
+        workbook = pd.read_excel(uploaded_file, sheet_name=None)
+    except Exception as exc:
+        return False, t(f"Could not read Excel file: {exc}", f"无法读取 Excel 文件：{exc}")
+
+    if "inputs" not in workbook:
+        return False, t("The workbook must contain a sheet named 'inputs'.", "Excel 文件必须包含名为 'inputs' 的工作表。")
+
+    input_df = workbook["inputs"].copy()
+    if "input_name" not in input_df.columns or "input_value" not in input_df.columns:
+        return False, t("The inputs sheet must contain input_name and input_value columns.", "inputs 工作表必须包含 input_name 和 input_value 两列。")
+
+    updated_count = 0
+    errors = []
+    for _, row in input_df.iterrows():
+        field_name = str(row.get("input_name", "")).strip()
+        if not field_name or field_name not in INPUT_EXCEL_FIELDS:
+            continue
+
+        try:
+            uploaded_value = _coerce_uploaded_input_value(
+                field_name,
+                row.get("input_value")
+            )
+
+            # ==========================================
+            # Streamlit widget lifecycle safe handling
+            # ==========================================
+
+            if field_name == "assumption_preset":
+                st.session_state[
+                    "pending_uploaded_assumption_preset"
+                ] = uploaded_value
+            else:
+                st.session_state[field_name] = uploaded_value
+
+            updated_count += 1
+            
+        except Exception as exc:
+            errors.append(f"{field_name}: {exc}")
+
+    if errors:
+        return False, t(
+            "Some uploaded inputs could not be applied: " + "; ".join(errors[:5]),
+            "部分上传输入无法应用：" + "; ".join(errors[:5]),
+        )
+
+    if "contribution_schedule" in workbook:
+        contribution_df = workbook["contribution_schedule"].copy()
+        st.session_state.contribution_events_df = normalise_contribution_events(
+            contribution_df,
+            household_mode=st.session_state.get("household_mode", "Two People"),
+        )
+
+    if "preset_assumptions" in workbook:
+        preset_df = workbook["preset_assumptions"].copy()
+        st.session_state.preset_table_df = ensure_valid_preset_table_df(preset_df)
+
+    if st.session_state.get("household_mode") == "One Person":
+        st.session_state.person2_name = ""
+        st.session_state.person2_current_age = 0
+        st.session_state.person2_retirement_age = 0
+        st.session_state.person2_pension_start_age = 0
+        st.session_state.person2_accum_super_balance = 0.0
+        st.session_state.person2_pension_super_balance = 0.0
+        st.session_state.person2_accum_super_cost_base = 0.0
+        st.session_state.person2_pension_super_cost_base = 0.0
+        st.session_state.person2_transfer_balance_cap = 0.0
+        st.session_state.person2_annual_income = 0.0
+        st.session_state.non_super_ownership_person1_pct = 100.0
+        st.session_state.retirement_spending_trigger = "Either Retired"
+        st.session_state.contribution_events_df = normalise_contribution_events(
+            st.session_state.contribution_events_df,
+            household_mode="One Person",
+        )
+
+    st.session_state.comparison_results = None
+    st.session_state.active_result_set_name = "Current Results"
+
+    return True, t(
+        f"Uploaded input applied successfully ({updated_count} fields updated). Please review inputs, then run the simulation.",
+        f"上传输入已应用成功（更新 {updated_count} 个字段）。请检查输入后再运行模拟。",
+    )
+
+
 def parse_formatted_number(value, is_percentage=False):
     text = str(value or "").strip()
 
@@ -426,6 +648,66 @@ def build_adviser_cashflow_df(det_df):
     )
 
 
+def build_adviser_cashflow_asset_movement_tax_df(det_df, inputs):
+    df = det_df.copy()
+
+    def safe_col(name):
+        return df[name] if name in df.columns else 0.0
+
+    opening_net_assets = (
+        safe_col("opening_non_super_balance")
+        + safe_col("opening_person1_accum_super_balance")
+        + safe_col("opening_person1_pension_super_balance")
+        + safe_col("opening_person2_accum_super_balance")
+        + safe_col("opening_person2_pension_super_balance")
+    )
+
+    closing_net_assets = safe_col("total_wealth")
+    investment_earnings = (
+        safe_col("non_super_earnings")
+        + safe_col("person1_accum_earnings")
+        + safe_col("person1_pension_earnings")
+        + safe_col("person2_accum_earnings")
+        + safe_col("person2_pension_earnings")
+    )
+    total_withdrawals = (
+        safe_col("non_super_withdrawal")
+        + safe_col("total_minimum_pension_drawdown")
+        + safe_col("total_extra_super_withdrawal")
+    )
+    total_income_tax = safe_col("person1_personal_tax_total") + safe_col("person2_personal_tax_total")
+
+    movement_df = pd.DataFrame({
+        "Year": safe_col("financial_year_end"),
+        "Opening Net Assets": opening_net_assets,
+        "Employment Income": safe_col("household_gross_income"),
+        "Investment Earnings": investment_earnings,
+        "Total Income": safe_col("household_gross_income") + investment_earnings,
+        "Household Spending": safe_col("spending"),
+        "Cash Contributions": safe_col("total_cash_contributions"),
+        "Minimum Pension Drawdown": safe_col("total_minimum_pension_drawdown"),
+        "Non-Super Withdrawal": safe_col("non_super_withdrawal"),
+        "Extra Super Withdrawal": safe_col("total_extra_super_withdrawal"),
+        "Total Withdrawals": total_withdrawals,
+        "P1 Total Income Tax": safe_col("person1_personal_tax_total"),
+        "P2 Total Income Tax": safe_col("person2_personal_tax_total"),
+        "Total Income Tax Per Household": total_income_tax,
+        "Super Contributions Tax": safe_col("total_super_contributions_tax"),
+        "Super Earnings Tax": safe_col("total_super_earnings_tax"),
+        "Super Withdrawal CGT Tax": safe_col("total_super_withdrawal_cgt_tax"),
+        "Total Tax Paid": safe_col("total_tax_paid"),
+        "Surplus Cash to Non-Super": safe_col("surplus_cash_to_non_super"),
+        "Unmet Shortfall": safe_col("unmet_shortfall"),
+        "Closing Net Assets": closing_net_assets,
+        "Net Asset Movement": closing_net_assets - opening_net_assets,
+    })
+
+    if is_one_person_inputs(inputs):
+        movement_df = movement_df.drop(columns=["P2 Total Income Tax"], errors="ignore")
+
+    return movement_df
+
+
 def build_cgt_validation_df(det_df, inputs):
     df = det_df.copy()
 
@@ -743,6 +1025,54 @@ def display_value_label(value_mode):
     return t("Present Value", "现值") if value_mode == "Present Value" else t("Future Value", "终值")
 
 
+@st.cache_data(show_spinner=False, max_entries=20)
+def run_scenario_cached(scenario_inputs, random_seed, cache_version="performance_v2"):
+    # Streamlit caches this by input content, so switching view/language/PV/FV does not recalculate.
+    det_df = run_deterministic_projection(scenario_inputs)
+    summary_df, all_paths_df = run_monte_carlo(
+        scenario_inputs,
+        random_seed=int(random_seed),
+    )
+    percentile_df = build_percentile_table(all_paths_df)
+    failure_prob_df = build_failure_probability_by_age(all_paths_df)
+
+    success_rate = summary_df["success"].mean()
+    median_final_wealth = summary_df["final_wealth"].median()
+    p10_final_wealth = summary_df["final_wealth"].quantile(0.10)
+    p90_final_wealth = summary_df["final_wealth"].quantile(0.90)
+
+    return {
+        "inputs": scenario_inputs,
+        "det_df": det_df,
+        "summary_df": summary_df,
+        # Deliberately do not keep all_paths_df in session; it is large and only needed to build summaries.
+        "all_paths_df": None,
+        "percentile_df": percentile_df,
+        "failure_prob_df": failure_prob_df,
+        "success_rate": success_rate,
+        "median_final_wealth": median_final_wealth,
+        "p10_final_wealth": p10_final_wealth,
+        "p90_final_wealth": p90_final_wealth,
+    }
+
+
+def render_light_input_badges(base_inputs):
+    high_risk_messages = []
+    if base_inputs["inflation_rate"] > 0.08:
+        high_risk_messages.append(t("⚠️ High inflation assumption", "⚠️ 通胀假设偏高"))
+    if base_inputs["super_capital_return_std"] >= 0.18 or base_inputs["non_super_capital_return_std"] >= 0.18:
+        high_risk_messages.append(t("⚠️ High volatility assumptions", "⚠️ 波动率假设偏高"))
+    if base_inputs["person1_retirement_age"] < 55 or (base_inputs["household_mode"] == "Two People" and base_inputs["person2_retirement_age"] < 55):
+        high_risk_messages.append(t("⚠️ Early retirement age", "⚠️ 退休年龄偏早"))
+    if base_inputs["number_of_simulations"] < 1000:
+        high_risk_messages.append(t("⚠️ Low simulation count", "⚠️ 模拟次数偏低"))
+    if base_inputs["non_super_cost_base"] > base_inputs["non_super_balance"]:
+        high_risk_messages.append(t("⚠️ Non-super cost base exceeds balance", "⚠️ 非养老金成本基础高于余额"))
+
+    if high_risk_messages:
+        st.markdown("  ".join([f"`{msg}`" for msg in high_risk_messages]))
+
+
 def render_live_input_feedback(base_inputs):
     validation_errors = validate_inputs(base_inputs)
     input_warnings = generate_input_warnings(base_inputs)
@@ -965,6 +1295,24 @@ if "ui_language" not in st.session_state:
 
 
 # ============================================================
+# SECTION: UPLOAD LIFECYCLE FIX
+# ============================================================
+
+if "pending_uploaded_assumption_preset" in st.session_state:
+    pending_preset = st.session_state.pop(
+        "pending_uploaded_assumption_preset"
+    )
+
+    if pending_preset in [
+        "Conservative",
+        "Base Case",
+        "Optimistic",
+        "Custom",
+    ]:
+        st.session_state["assumption_preset"] = pending_preset
+
+
+# ============================================================
 # SECTION: SESSION DEFAULTS
 # ============================================================
 
@@ -972,6 +1320,12 @@ defaults = {
     "comparison_results": None,
     "saved_result_sets": {},
     "active_result_set_name": "Current Results",
+    "workspace_mode": "Edit Inputs",
+    "show_assumption_panel": False,
+    "show_live_input_checks": False,
+    "simulation_depth": "Standard",
+    "adviser_result_section": "Overview",
+    "prepare_excel_export": False,
     "save_result_name": "",
     "rename_result_name": "",
     "assumption_details_df": None,
@@ -1075,6 +1429,9 @@ projection_years = int(st.session_state.projection_years)
 retirement_spending_trigger = st.session_state.retirement_spending_trigger
 household_mode = st.session_state.household_mode
 value_mode = st.session_state.value_mode
+workspace_mode = st.session_state.workspace_mode
+show_assumption_panel = bool(st.session_state.show_assumption_panel)
+show_live_input_checks = bool(st.session_state.show_live_input_checks)
 is_one_person_mode = household_mode == "One Person"
 
 person1_current_age = int(st.session_state.person1_current_age)
@@ -1164,10 +1521,56 @@ with st.sidebar:
         ),
     )
 
+    workspace_options = [t("Edit Inputs", "编辑输入"), t("View Results", "查看结果")]
+    workspace_mode_label = st.radio(
+        t("Workspace", "工作区"),
+        options=workspace_options,
+        index=0 if st.session_state.workspace_mode == "Edit Inputs" else 1,
+        help=t(
+            "Use Edit Inputs for faster input changes. Switch to View Results when you want to review charts and tables.",
+            "编辑输入时不会反复渲染大型图表和表格，速度更快。需要查看结果时切换到查看结果。",
+        ),
+    )
+    workspace_mode = "Edit Inputs" if workspace_mode_label == workspace_options[0] else "View Results"
+
+    show_live_input_checks = st.checkbox(
+        t("Live input checks", "即时输入检查"),
+        value=bool(st.session_state.show_live_input_checks),
+        help=t(
+            "Turn this on only when you want full live validation while editing. Keeping it off makes input navigation faster.",
+            "只在需要边输入边完整检查时打开。关闭可让输入区切换更快。",
+        ),
+    )
+
+    show_assumption_panel = st.checkbox(
+        t("Show assumption settings panel", "显示假设设置面板"),
+        value=bool(st.session_state.show_assumption_panel),
+        help=t(
+            "Hide the editable preset table during normal input work to reduce rerun cost.",
+            "日常输入时隐藏可编辑预设表，减少页面重跑开销。",
+        ),
+    )
+
     scenario_mode = st.radio(
         t("Scenario Mode", "情景模式"),
         options=[t("Single Scenario", "单一情景"), t("Compare Standard Presets", "比较标准预设")],
     )
+
+    simulation_depth_options = ["Fast", "Standard", "Deep"]
+    simulation_depth = st.radio(
+        t("Simulation Depth", "模拟深度"),
+        options=simulation_depth_options,
+        index=simulation_depth_options.index(st.session_state.get("simulation_depth", "Standard")),
+        help=t(
+            "Fast is best while editing. Standard is suitable for review. Deep is slower and intended for final stress testing.",
+            "编辑时建议用 Fast。Standard 适合复核。Deep 更慢，适合最终压力测试。",
+        ),
+    )
+    st.session_state.simulation_depth = simulation_depth
+    simulation_depth_map = {"Fast": 300, "Standard": 1000, "Deep": 3000}
+    number_of_simulations = simulation_depth_map[simulation_depth]
+    st.session_state.number_of_simulations = number_of_simulations
+    st.caption(t(f"Monte Carlo simulations: {number_of_simulations:,}", f"蒙特卡洛模拟次数：{number_of_simulations:,}"))
 
     preset_choice = st.selectbox(
         t("Assumption Preset", "假设预设"),
@@ -1183,6 +1586,46 @@ with st.sidebar:
                 "单人模式会把 Person 2 从模型中移除。家庭支出会保持原输入值不变，因此请手动检查支出假设。",
             )
         )
+
+    st.markdown(f"### {t('Input Excel', '输入 Excel')}")
+    st.download_button(
+        label=t("Download Excel Template", "下载 Excel 模板"),
+        data=build_excel_input_workbook_bytes(include_current_values=False),
+        file_name="financial_modelling_input_template.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+        help=t(
+            "Download a clean workbook template for entering model inputs offline.",
+            "下载空白输入模板，便于离线填写模型输入。",
+        ),
+    )
+
+    uploaded_input_file = st.file_uploader(
+        t("Upload Input", "上传输入"),
+        type=["xlsx"],
+        key="input_excel_uploader",
+        help=t(
+            "Upload a completed input workbook. Existing results will be cleared after import.",
+            "上传填写完成的输入工作簿。导入后当前结果会被清空。",
+        ),
+    )
+    apply_uploaded_input_button = st.button(
+        t("Apply Uploaded Input", "应用上传输入"),
+        use_container_width=True,
+        disabled=(uploaded_input_file is None),
+    )
+
+    st.download_button(
+        label=t("Download Current Input", "下载当前输入"),
+        data=build_excel_input_workbook_bytes(include_current_values=True),
+        file_name="financial_modelling_current_input.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+        help=t(
+            "Download the current on-screen inputs, contribution schedule, and preset assumptions.",
+            "下载当前页面输入、缴款计划和预设假设。",
+        ),
+    )
 
     st.markdown(f"### {t('Saved Results', '已保存结果')}")
     saved_result_sets = st.session_state.get("saved_result_sets", {})
@@ -1243,6 +1686,12 @@ with st.sidebar:
     run_button = st.button(t("Run Simulation", "运行模拟"), type="primary", use_container_width=True)
 
 
+if apply_uploaded_input_button:
+    ok, message = apply_uploaded_input_workbook(uploaded_input_file)
+    (st.success if ok else st.error)(message)
+    if ok:
+        st.rerun()
+
 if save_results_button:
     ok, message = save_current_results_snapshot(save_result_name)
     (st.success if ok else st.error)(message)
@@ -1294,49 +1743,56 @@ Use this tool to model retirement sustainability, super accumulation to pension 
 # SECTION: ASSUMPTION SETTINGS PANEL
 # ============================================================
 
-if st.button(
-    t("Reset Preset Assumptions to Default", "将预设假设重置为默认值"),
-    key="reset_preset_table_button_panel",
-):
-    st.session_state.preset_table_df = get_default_preset_table_df()
-    st.rerun()
-
 runtime_presets = preset_table_to_dict(st.session_state.preset_table_df)
+preset_table_df = st.session_state.preset_table_df.copy()
 
-with st.container(border=True):
-    top_left, top_right = st.columns([2, 1])
+if show_assumption_panel:
+    if st.button(
+        t("Reset Preset Assumptions to Default", "将预设假设重置为默认值"),
+        key="reset_preset_table_button_panel",
+    ):
+        st.session_state.preset_table_df = get_default_preset_table_df()
+        st.rerun()
 
-    with top_left:
-        st.subheader(t("Assumption Settings Panel", "假设设置面板"))
-        st.caption(t("Manage reusable preset assumptions here. The modelling engine stores these as decimals such as 0.03 = 3.0%.", "在此管理可重复使用的预设假设。建模引擎使用小数表示，例如 0.03 = 3.0%。"))
+    with st.container(border=True):
+        top_left, top_right = st.columns([2, 1])
 
-    with top_right:
-        st.metric(t("Active Preset", "当前预设"), preset_choice)
-        st.caption(t("Preset selection stays in the sidebar for quick scenario control.", "预设选择保留在侧边栏，便于快速切换情景。"))
+        with top_left:
+            st.subheader(t("Assumption Settings Panel", "假设设置面板"))
+            st.caption(t("Manage reusable preset assumptions here. The modelling engine stores these as decimals such as 0.03 = 3.0%.", "在此管理可重复使用的预设假设。建模引擎使用小数表示，例如 0.03 = 3.0%。"))
 
-    preset_table_df = st.data_editor(
-        st.session_state.preset_table_df,
-        key="preset_table_editor_panel",
-        num_rows="fixed",
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "preset": st.column_config.TextColumn("Preset", disabled=True),
-            "super_income_return_mean": st.column_config.NumberColumn("Super Income Mean", format="%.3f"),
-            "super_income_return_std": st.column_config.NumberColumn("Super Income Std", format="%.3f"),
-            "super_capital_return_mean": st.column_config.NumberColumn("Super Capital Mean", format="%.3f"),
-            "super_capital_return_std": st.column_config.NumberColumn("Super Capital Std", format="%.3f"),
-            "non_super_income_return_mean": st.column_config.NumberColumn("Non-Super Income Mean", format="%.3f"),
-            "non_super_income_return_std": st.column_config.NumberColumn("Non-Super Income Std", format="%.3f"),
-            "non_super_capital_return_mean": st.column_config.NumberColumn("Non-Super Capital Mean", format="%.3f"),
-            "non_super_capital_return_std": st.column_config.NumberColumn("Non-Super Capital Std", format="%.3f"),
-            "inflation_rate": st.column_config.NumberColumn("Inflation", format="%.3f"),
-        },
-    )
+        with top_right:
+            st.metric(t("Active Preset", "当前预设"), preset_choice)
+            st.caption(t("Preset selection stays in the sidebar for quick scenario control.", "预设选择保留在侧边栏，便于快速切换情景。"))
 
-    st.session_state.preset_table_df = ensure_valid_preset_table_df(preset_table_df)
-    runtime_presets = preset_table_to_dict(st.session_state.preset_table_df)
+        preset_table_df = st.data_editor(
+            st.session_state.preset_table_df,
+            key="preset_table_editor_panel",
+            num_rows="fixed",
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "preset": st.column_config.TextColumn("Preset", disabled=True),
+                "super_income_return_mean": st.column_config.NumberColumn("Super Income Mean", format="%.3f"),
+                "super_income_return_std": st.column_config.NumberColumn("Super Income Std", format="%.3f"),
+                "super_capital_return_mean": st.column_config.NumberColumn("Super Capital Mean", format="%.3f"),
+                "super_capital_return_std": st.column_config.NumberColumn("Super Capital Std", format="%.3f"),
+                "non_super_income_return_mean": st.column_config.NumberColumn("Non-Super Income Mean", format="%.3f"),
+                "non_super_income_return_std": st.column_config.NumberColumn("Non-Super Income Std", format="%.3f"),
+                "non_super_capital_return_mean": st.column_config.NumberColumn("Non-Super Capital Mean", format="%.3f"),
+                "non_super_capital_return_std": st.column_config.NumberColumn("Non-Super Capital Std", format="%.3f"),
+                "inflation_rate": st.column_config.NumberColumn("Inflation", format="%.3f"),
+            },
+        )
 
+        st.session_state.preset_table_df = ensure_valid_preset_table_df(preset_table_df)
+        preset_table_df = st.session_state.preset_table_df.copy()
+        runtime_presets = preset_table_to_dict(st.session_state.preset_table_df)
+else:
+    st.caption(t(
+        "Assumption Settings Panel is hidden for faster editing. Enable it in the sidebar when you need to edit preset assumptions.",
+        "为提升输入速度，假设设置面板已隐藏。需要编辑预设假设时，可在侧边栏打开。",
+    ))
 
 # ============================================================
 # SECTION: MAIN INPUT NAVIGATION
@@ -1397,445 +1853,449 @@ selected_section_label = st.segmented_control(
     options=[section_labels[k] for k in section_keys],
     selection_mode="single",
     default=section_labels[current_section_key],
+    key="active_input_section_segmented",
 )
 
 active_input_section = next(
-    k for k in section_keys if section_labels[k] == selected_section_label
+    k for k in section_keys
+    if section_labels[k] == selected_section_label
 )
 
-st.session_state.active_input_section = active_input_section
+with st.form("input_editor_form", clear_on_submit=False):
+    if active_input_section == "report":
+        st.subheader(t("Report", "报告"))
+        report_title = st.text_input(
+            t("Title (Optional)", "标题（可选）"),
+            value=st.session_state.report_title,
+            key="report_title_input",
+            help=t("Used in exports and saved result documentation.", "用于导出文件和已保存结果说明。"),
+        )
 
-if active_input_section == "report":
-    st.subheader(t("Report", "报告"))
-    report_title = st.text_input(
-        t("Title (Optional)", "标题（可选）"),
-        value=st.session_state.report_title,
-        key="report_title_input",
-        help=t("Used in exports and saved result documentation.", "用于导出文件和已保存结果说明。"),
-    )
-
-    st.subheader(t("Names", "姓名"))
-    name_col1, name_col2 = st.columns(2)
-    with name_col1:
-        person1_name = st.text_input(
-            t("Person 1 Name (Optional)", "人物 1 姓名（可选）"),
-            value=st.session_state.person1_name,
-            key="person1_name_input",
-            help=t("Optional display name used in charts and tables.", "用于图表和表格中的可选显示名称。"),
-        )
-    with name_col2:
-        person2_name = st.text_input(
-            t("Person 2 Name (Optional)", "人物 2 姓名（可选）"),
-            value=st.session_state.person2_name,
-            key="person2_name_input",
-            disabled=is_one_person_mode,
-            help=t("Optional display name used in charts and tables.", "用于图表和表格中的可选显示名称。"),
-        )
-        if is_one_person_mode:
-            person2_name = ""
-
-elif active_input_section == "projection":
-    st.subheader(t("Projection Timing", "预测时间设置"))
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        start_financial_year = st.number_input(
-            t("Start Financial Year", "起始财政年度"),
-            value=int(st.session_state.start_financial_year),
-            step=1,
-            min_value=2000,
-            help=t("Financial year end used as year 1 of the projection, e.g. 2027 means 2026/27.", "预测起始财政年度的终点年，例如 2027 表示 2026/27 财年。"),
-        )
-    with col2:
-        projection_years = st.number_input(
-            t("Projection Years", "预测年数"),
-            value=int(st.session_state.projection_years),
-            step=1,
-            min_value=1,
-            help=t("How many financial years to project forward.", "向前预测多少个财政年度。"),
-        )
-    with col3:
-        if is_one_person_mode:
-            retirement_spending_trigger = "Either Retired"
-            st.text_input(
-                t("Retirement Spending Trigger", "退休支出触发条件"),
-                value=t("Person 1 Retired", "人物 1 退休后触发"),
-                disabled=True,
-                help=t(
-                    "In one-person mode the retirement spending trigger is always based on Person 1 only.",
-                    "单人模式下，退休支出触发条件始终只基于 Person 1。",
-                ),
+        st.subheader(t("Names", "姓名"))
+        name_col1, name_col2 = st.columns(2)
+        with name_col1:
+            person1_name = st.text_input(
+                t("Person 1 Name (Optional)", "人物 1 姓名（可选）"),
+                value=st.session_state.person1_name,
+                key="person1_name_input",
+                help=t("Optional display name used in charts and tables.", "用于图表和表格中的可选显示名称。"),
             )
-        else:
-            retirement_spending_trigger = st.selectbox(
-                t("Retirement Spending Trigger", "退休支出触发条件"),
-                options=[
-                    t("Both Retired", "双方都退休"),
-                    t("Either Retired", "任一方退休"),
-                ],
-                index=0 if st.session_state.retirement_spending_trigger in ["Both Retired", "双方都退休"] else 1,
+        with name_col2:
+            person2_name = st.text_input(
+                t("Person 2 Name (Optional)", "人物 2 姓名（可选）"),
+                value=st.session_state.person2_name,
+                key="person2_name_input",
+                disabled=is_one_person_mode,
+                help=t("Optional display name used in charts and tables.", "用于图表和表格中的可选显示名称。"),
             )
+            if is_one_person_mode:
+                person2_name = ""
 
-            if retirement_spending_trigger == t("Both Retired", "双方都退休"):
-                retirement_spending_trigger = "Both Retired"
-            else:
-                retirement_spending_trigger = "Either Retired"
-
-elif active_input_section == "person1":
-    st.subheader(t("Person 1", "人物 1"))
-    p1a, p1b, p1c = st.columns(3)
-    with p1a:
-        person1_current_age = st.number_input(
-            t("Person 1 Current Age", "人物 1 当前年龄"),
-            value=int(st.session_state.person1_current_age),
-            step=1,
-            help=t("Current age at the start of the projection.", "预测开始时的当前年龄。"),
-        )
-        person1_accum_super_balance = currency_text_input(
-            t("Person 1 Accumulation Super Balance", "人物 1 累积型养老金余额"),
-            st.session_state.person1_accum_super_balance,
-            "person1_accum_super_balance_input",
-            help_text=t("Opening accumulation super balance.", "期初 accumulation super 余额。"),
-        )
-        person1_pension_super_balance = currency_text_input(
-            t("Person 1 Pension Super Balance", "人物 1 养老金阶段余额"),
-            st.session_state.person1_pension_super_balance,
-            "person1_pension_super_balance_input",
-            help_text=t("Opening pension super balance.", "期初 pension super 余额。"),
-        )
-    with p1b:
-        person1_retirement_age = st.number_input(
-            t("Person 1 Retirement Age", "人物 1 退休年龄"),
-            value=int(st.session_state.person1_retirement_age),
-            step=1,
-        )
-        person1_accum_super_cost_base = currency_text_input(
-            t("Person 1 Accumulation Super Cost Base", "人物 1 累积型养老金成本基础"),
-            st.session_state.person1_accum_super_cost_base,
-            "person1_accum_super_cost_base_input",
-            help_text=t("Cost base used for super withdrawal CGT approximation in accumulation phase.", "用于 accumulation 阶段提取 CGT 近似计算的成本基础。"),
-        )
-        person1_pension_super_cost_base = currency_text_input(
-            t("Person 1 Pension Super Cost Base", "人物 1 养老金阶段成本基础"),
-            st.session_state.person1_pension_super_cost_base,
-            "person1_pension_super_cost_base_input",
-            help_text=t("Cost base carried inside the pension pool for internal tracking.", "用于 pension 池内部追踪的成本基础。"),
-        )
-    with p1c:
-        person1_pension_start_age = st.number_input(
-            t("Person 1 Pension Start Age", "人物 1 养老金开始年龄"),
-            value=int(st.session_state.person1_pension_start_age),
-            step=1,
-        )
-        person1_transfer_balance_cap = currency_text_input(
-            t("Person 1 Transfer Balance Cap", "人物 1 转移余额上限"),
-            st.session_state.person1_transfer_balance_cap,
-            "person1_transfer_balance_cap_input",
-            help_text=t("Transfer Balance Cap used when moving accumulation super to pension.", "accumulation 转 pension 时使用的 Transfer Balance Cap。"),
-        )
-        person1_annual_income = currency_text_input(
-            t("Person 1 Annual Income", "人物 1 年收入"),
-            st.session_state.person1_annual_income,
-            "person1_annual_income_input",
-            help_text=t("Gross annual employment income while still working.", "仍在工作时的税前年收入。"),
-        )
-
-elif active_input_section == "person2":
-    st.subheader(t("Person 2", "人物 2"))
-    p2a, p2b, p2c = st.columns(3)
-    with p2a:
-        person2_current_age = st.number_input(
-            t("Person 2 Current Age", "人物 2 当前年龄"),
-            value=int(st.session_state.person2_current_age),
-            step=1,
-            help=t("Current age at the start of the projection.", "预测开始时的当前年龄。"),
-        )
-        person2_accum_super_balance = currency_text_input(
-            t("Person 2 Accumulation Super Balance", "人物 2 累积型养老金余额"),
-            st.session_state.person2_accum_super_balance,
-            "person2_accum_super_balance_input",
-            help_text=t("Opening accumulation super balance.", "期初 accumulation super 余额。"),
-        )
-        person2_pension_super_balance = currency_text_input(
-            t("Person 2 Pension Super Balance", "人物 2 养老金阶段余额"),
-            st.session_state.person2_pension_super_balance,
-            "person2_pension_super_balance_input",
-            help_text=t("Opening pension super balance.", "期初 pension super 余额。"),
-        )
-    with p2b:
-        person2_retirement_age = st.number_input(
-            t("Person 2 Retirement Age", "人物 2 退休年龄"),
-            value=int(st.session_state.person2_retirement_age),
-            step=1,
-            help=t("Employment income stops once current age reaches retirement age.", "达到退休年龄后，employment income 停止。"),
-        )
-        person2_accum_super_cost_base = currency_text_input(
-            t("Person 2 Accumulation Super Cost Base", "人物 2 累积型养老金成本基础"),
-            st.session_state.person2_accum_super_cost_base,
-            "person2_accum_super_cost_base_input",
-            help_text=t("Cost base used for super withdrawal CGT approximation in accumulation phase.", "用于 accumulation 阶段提取 CGT 近似计算的成本基础。"),
-        )
-        person2_pension_super_cost_base = currency_text_input(
-            t("Person 2 Pension Super Cost Base", "人物 2 养老金阶段成本基础"),
-            st.session_state.person2_pension_super_cost_base,
-            "person2_pension_super_cost_base_input",
-            help_text=t("Cost base carried inside the pension pool for internal tracking.", "用于 pension 池内部追踪的成本基础。"),
-        )
-    with p2c:
-        person2_pension_start_age = st.number_input(
-            t("Person 2 Pension Start Age", "人物 2 养老金开始年龄"),
-            value=int(st.session_state.person2_pension_start_age),
-            step=1,
-            help=t("Age when accumulation super can start transferring into pension phase in the model.", "模型中 accumulation super 开始转入 pension 的年龄。"),
-        )
-        person2_transfer_balance_cap = currency_text_input(
-            t("Person 2 Transfer Balance Cap", "人物 2 转移余额上限"),
-            st.session_state.person2_transfer_balance_cap,
-            "person2_transfer_balance_cap_input",
-            help_text=t("Transfer Balance Cap used when moving accumulation super to pension.", "accumulation 转 pension 时使用的 Transfer Balance Cap。"),
-        )
-        person2_annual_income = currency_text_input(
-            t("Person 2 Annual Income", "人物 2 年收入"),
-            st.session_state.person2_annual_income,
-            "person2_annual_income_input",
-            help_text=t("Gross annual employment income while still working.", "仍在工作时的税前年收入。"),
-        )
-
-elif active_input_section == "household":
-    st.subheader(t("Household", "家庭"))
-    if is_one_person_mode:
-        st.info(
-            t(
-                "One Person mode removes Person 2 from the model, but the household spending fields below stay exactly as entered. Reduce them manually if you want a true one-person budget.",
-                "单人模式会把 Person 2 从模型中移除，但下面的家庭支出栏位不会自动变化。如果你希望按单人预算建模，请手动调低这些数值。",
-            )
-        )
-    hh1, hh2 = st.columns(2)
-    with hh1:
-        non_super_balance = currency_text_input(
-            t("Non-Super Balance", "非养老金资产余额"),
-            st.session_state.non_super_balance,
-            "non_super_balance_input",
-            help_text=t("Opening non-super investment pool market value.", "期初非养老金投资池市值。"),
-        )
-        annual_living_expenses = currency_text_input(
-            t("Annual Living Expenses", "年度生活支出"),
-            st.session_state.annual_living_expenses,
-            "annual_living_expenses_input",
-            help_text=t("Current annual household spending before retirement trigger applies.", "退休支出触发前的当前年度家庭支出。"),
-        )
-        cgt_discount_rate = percentage_text_input(
-            t("CGT Discount Rate", "资本利得税折扣率"),
-            float(st.session_state.cgt_discount_rate),
-            "cgt_discount_rate_input",
-            decimals=1,
-            help_text=t("Discount applied to non-super realised capital gains under the average-cost model.", "在 average-cost 模型下适用于非养老金已实现资本利得的折扣率。"),
-        )
-    with hh2:
-        non_super_cost_base = currency_text_input(
-            t("Non-Super Cost Base", "非养老金资产成本基础"),
-            st.session_state.non_super_cost_base,
-            "non_super_cost_base_input",
-            help_text=t("Cost base of the non-super investment pool. It must not exceed market value.", "非养老金投资池的成本基础，不能高于当前市值。"),
-        )
-        retirement_spending = currency_text_input(
-            t("Retirement Spending", "退休后支出"),
-            st.session_state.retirement_spending,
-            "retirement_spending_input",
-            help_text=t("Target household spending after the retirement trigger is reached. This amount is internally indexed by inflation before activation.", "达到退休触发条件后的目标家庭支出。该数值在生效前也会按 inflation 内部递增。"),
-        )
-        if is_one_person_mode:
-            st.text_input(
-                t("Person 1 Ownership %", "人物 1 持有比例 %"),
-                value="100.0%",
-                disabled=True,
-                key="non_super_ownership_person1_display",
-                help=t("Single-person mode fixes non-super ownership to 100% Person 1.", "单人模式下非养老金持有比例固定为 Person 1 的 100%。"),
-            )
-            non_super_ownership_person1 = 100.0
-        else:
-            non_super_ownership_person1 = percentage_text_input(
-                t("Person 1 Ownership %", "人物 1 持有比例 %"),
-                st.session_state.non_super_ownership_person1_pct / 100.0,
-                "non_super_ownership_person1_input",
-                decimals=1,
-                help_text=t("Share of non-super taxable income and tax allocated to Person 1.", "分配给 Person 1 的非养老金应税收入与税负比例。"),
-            ) * 100.0
-
-elif active_input_section == "contributions":
-    st.subheader(t("Contribution Schedule", "缴款计划"))
-    contribution_person_options = ["Person 1"] if is_one_person_mode else ["Person 1", "Person 2"]
-
-    contribution_source_df = st.session_state.contribution_events_df.copy()
-    if is_one_person_mode and not contribution_source_df.empty:
-        contribution_source_df = contribution_source_df[contribution_source_df["person"] != "Person 2"].reset_index(drop=True)
-        st.caption(t("Single-person mode automatically ignores any existing Person 2 contribution rows.", "单人模式会自动忽略现有的 Person 2 缴款行。"))
-
-    contribution_events_df = st.data_editor(
-        contribution_source_df,
-        key="contribution_events_editor",
-        num_rows="dynamic",
-        use_container_width=True,
-        column_config={
-            "financial_year": st.column_config.NumberColumn(
-                t("Financial Year", "财政年度"),
-                min_value=2000,
+    elif active_input_section == "projection":
+        st.subheader(t("Projection Timing", "预测时间设置"))
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            start_financial_year = st.number_input(
+                t("Start Financial Year", "起始财政年度"),
+                value=int(st.session_state.start_financial_year),
                 step=1,
-            ),
-            "person": st.column_config.SelectboxColumn(
-                t("Person", "人物"),
-                options=contribution_person_options,
-            ),
-            "contribution_type": st.column_config.SelectboxColumn(
-                t("Contribution Type", "缴款类型"),
-                options=["personal_deductible", "non_concessional"],
-            ),
-            "amount": st.column_config.NumberColumn(
-                t("Amount", "金额"),
-                min_value=0.0,
-                step=1000.0,
-                format="$%.0f",
-            ),
-        },
-    )
+                min_value=2000,
+                help=t("Financial year end used as year 1 of the projection, e.g. 2027 means 2026/27.", "预测起始财政年度的终点年，例如 2027 表示 2026/27 财年。"),
+            )
+        with col2:
+            projection_years = st.number_input(
+                t("Projection Years", "预测年数"),
+                value=int(st.session_state.projection_years),
+                step=1,
+                min_value=1,
+                help=t("How many financial years to project forward.", "向前预测多少个财政年度。"),
+            )
+        with col3:
+            if is_one_person_mode:
+                retirement_spending_trigger = "Either Retired"
+                st.text_input(
+                    t("Retirement Spending Trigger", "退休支出触发条件"),
+                    value=t("Person 1 Retired", "人物 1 退休后触发"),
+                    disabled=True,
+                    help=t(
+                        "In one-person mode the retirement spending trigger is always based on Person 1 only.",
+                        "单人模式下，退休支出触发条件始终只基于 Person 1。",
+                    ),
+                )
+            else:
+                retirement_spending_trigger = st.selectbox(
+                    t("Retirement Spending Trigger", "退休支出触发条件"),
+                    options=[
+                        t("Both Retired", "双方都退休"),
+                        t("Either Retired", "任一方退休"),
+                    ],
+                    index=0 if st.session_state.retirement_spending_trigger in ["Both Retired", "双方都退休"] else 1,
+                )
 
-elif active_input_section == "returns":
-    if scenario_mode == "Single Scenario" and preset_choice == "Custom":
-        st.subheader(t("Return Assumptions", "回报假设"))
-        r1, r2, r3 = st.columns(3)
-        with r1:
-            super_income_return_mean = percentage_text_input(
-                t("Super Income Return Mean", "养老金收益型回报均值"),
-                st.session_state.super_income_return_mean,
-                "super_income_return_mean_input",
-                decimals=1,
-                help_text=t("Expected annual income-style return on super assets.", "养老金资产的年度收益型回报假设。"),
-            )
-            super_capital_return_mean = percentage_text_input(
-                t("Super Capital Return Mean", "养老金资本增值回报均值"),
-                st.session_state.super_capital_return_mean,
-                "super_capital_return_mean_input",
-                decimals=1,
-                help_text=t("Expected annual capital growth on super assets.", "养老金资产的年度资本增值回报假设。"),
-            )
-            inflation_rate = percentage_text_input(
-                t("Inflation Rate", "通胀率"),
-                st.session_state.inflation_rate,
-                "inflation_rate_input",
-                decimals=1,
-                help_text=t("Inflation used to index salary and spending assumptions.", "用于收入与支出递增的 inflation 假设。"),
-            )
-        with r2:
-            super_income_return_std = percentage_text_input(
-                t("Super Income Return Std", "养老金收益型回报波动"),
-                st.session_state.super_income_return_std,
-                "super_income_return_std_input",
-                decimals=1,
-            )
-            super_capital_return_std = percentage_text_input(
-                t("Super Capital Return Std", "养老金资本增值回报波动"),
-                st.session_state.super_capital_return_std,
-                "super_capital_return_std_input",
-                decimals=1,
-            )
-        with r3:
-            non_super_income_return_mean = percentage_text_input(
-                t("Non-Super Income Return Mean", "非养老金收益型回报均值"),
-                st.session_state.non_super_income_return_mean,
-                "non_super_income_return_mean_input",
-                decimals=1,
-            )
-            non_super_capital_return_mean = percentage_text_input(
-                t("Non-Super Capital Return Mean", "非养老金资本增值回报均值"),
-                st.session_state.non_super_capital_return_mean,
-                "non_super_capital_return_mean_input",
-                decimals=1,
-            )
-            non_super_income_return_std = percentage_text_input(
-                t("Non-Super Income Return Std", "非养老金收益型回报波动"),
-                st.session_state.non_super_income_return_std,
-                "non_super_income_return_std_input",
-                decimals=1,
-            )
-            non_super_capital_return_std = percentage_text_input(
-                t("Non-Super Capital Return Std", "非养老金资本增值回报波动"),
-                st.session_state.non_super_capital_return_std,
-                "non_super_capital_return_std_input",
-                decimals=1,
-            )
-    else:
-        selected_preset = preset_choice if preset_choice in runtime_presets else "Base Case"
-        selected_values = runtime_presets[selected_preset]
+                if retirement_spending_trigger == t("Both Retired", "双方都退休"):
+                    retirement_spending_trigger = "Both Retired"
+                else:
+                    retirement_spending_trigger = "Either Retired"
 
-        st.subheader(t("Return Assumptions", "回报假设"))
-        st.info(
-            t(
-                f"Using values from Assumption Settings Panel: {selected_preset}",
-                f"使用假设设置面板中的参数：{selected_preset}",
+    elif active_input_section == "person1":
+        st.subheader(t("Person 1", "人物 1"))
+        p1a, p1b, p1c = st.columns(3)
+        with p1a:
+            person1_current_age = st.number_input(
+                t("Person 1 Current Age", "人物 1 当前年龄"),
+                value=int(st.session_state.person1_current_age),
+                step=1,
+                help=t("Current age at the start of the projection.", "预测开始时的当前年龄。"),
             )
-        )
+            person1_accum_super_balance = currency_text_input(
+                t("Person 1 Accumulation Super Balance", "人物 1 累积型养老金余额"),
+                st.session_state.person1_accum_super_balance,
+                "person1_accum_super_balance_input",
+                help_text=t("Opening accumulation super balance.", "期初 accumulation super 余额。"),
+            )
+            person1_pension_super_balance = currency_text_input(
+                t("Person 1 Pension Super Balance", "人物 1 养老金阶段余额"),
+                st.session_state.person1_pension_super_balance,
+                "person1_pension_super_balance_input",
+                help_text=t("Opening pension super balance.", "期初 pension super 余额。"),
+            )
+        with p1b:
+            person1_retirement_age = st.number_input(
+                t("Person 1 Retirement Age", "人物 1 退休年龄"),
+                value=int(st.session_state.person1_retirement_age),
+                step=1,
+            )
+            person1_accum_super_cost_base = currency_text_input(
+                t("Person 1 Accumulation Super Cost Base", "人物 1 累积型养老金成本基础"),
+                st.session_state.person1_accum_super_cost_base,
+                "person1_accum_super_cost_base_input",
+                help_text=t("Cost base used for super withdrawal CGT approximation in accumulation phase.", "用于 accumulation 阶段提取 CGT 近似计算的成本基础。"),
+            )
+            person1_pension_super_cost_base = currency_text_input(
+                t("Person 1 Pension Super Cost Base", "人物 1 养老金阶段成本基础"),
+                st.session_state.person1_pension_super_cost_base,
+                "person1_pension_super_cost_base_input",
+                help_text=t("Cost base carried inside the pension pool for internal tracking.", "用于 pension 池内部追踪的成本基础。"),
+            )
+        with p1c:
+            person1_pension_start_age = st.number_input(
+                t("Person 1 Pension Start Age", "人物 1 养老金开始年龄"),
+                value=int(st.session_state.person1_pension_start_age),
+                step=1,
+            )
+            person1_transfer_balance_cap = currency_text_input(
+                t("Person 1 Transfer Balance Cap", "人物 1 转移余额上限"),
+                st.session_state.person1_transfer_balance_cap,
+                "person1_transfer_balance_cap_input",
+                help_text=t("Transfer Balance Cap used when moving accumulation super to pension.", "accumulation 转 pension 时使用的 Transfer Balance Cap。"),
+            )
+            person1_annual_income = currency_text_input(
+                t("Person 1 Annual Income", "人物 1 年收入"),
+                st.session_state.person1_annual_income,
+                "person1_annual_income_input",
+                help_text=t("Gross annual employment income while still working.", "仍在工作时的税前年收入。"),
+            )
 
-        display_df = pd.DataFrame(
-            {
-                t("Assumption", "假设"): [
-                    t("Super Income Return Mean", "养老金收益型回报均值"),
-                    t("Super Income Return Std", "养老金收益型回报波动"),
-                    t("Super Capital Return Mean", "养老金资本增值回报均值"),
-                    t("Super Capital Return Std", "养老金资本增值回报波动"),
-                    t("Non-Super Income Return Mean", "非养老金收益型回报均值"),
-                    t("Non-Super Income Return Std", "非养老金收益型回报波动"),
-                    t("Non-Super Capital Return Mean", "非养老金资本增值回报均值"),
-                    t("Non-Super Capital Return Std", "非养老金资本增值回报波动"),
-                    t("Inflation Rate", "通胀率"),
-                ],
-                t("Value", "数值"): [
-                    selected_values["super_income_return_mean"] * 100.0,
-                    selected_values["super_income_return_std"] * 100.0,
-                    selected_values["super_capital_return_mean"] * 100.0,
-                    selected_values["super_capital_return_std"] * 100.0,
-                    selected_values["non_super_income_return_mean"] * 100.0,
-                    selected_values["non_super_income_return_std"] * 100.0,
-                    selected_values["non_super_capital_return_mean"] * 100.0,
-                    selected_values["non_super_capital_return_std"] * 100.0,
-                    selected_values["inflation_rate"] * 100.0,
-                ],
-            }
-        )
-        st.dataframe(
-            display_df,
+    elif active_input_section == "person2":
+        st.subheader(t("Person 2", "人物 2"))
+        p2a, p2b, p2c = st.columns(3)
+        with p2a:
+            person2_current_age = st.number_input(
+                t("Person 2 Current Age", "人物 2 当前年龄"),
+                value=int(st.session_state.person2_current_age),
+                step=1,
+                help=t("Current age at the start of the projection.", "预测开始时的当前年龄。"),
+            )
+            person2_accum_super_balance = currency_text_input(
+                t("Person 2 Accumulation Super Balance", "人物 2 累积型养老金余额"),
+                st.session_state.person2_accum_super_balance,
+                "person2_accum_super_balance_input",
+                help_text=t("Opening accumulation super balance.", "期初 accumulation super 余额。"),
+            )
+            person2_pension_super_balance = currency_text_input(
+                t("Person 2 Pension Super Balance", "人物 2 养老金阶段余额"),
+                st.session_state.person2_pension_super_balance,
+                "person2_pension_super_balance_input",
+                help_text=t("Opening pension super balance.", "期初 pension super 余额。"),
+            )
+        with p2b:
+            person2_retirement_age = st.number_input(
+                t("Person 2 Retirement Age", "人物 2 退休年龄"),
+                value=int(st.session_state.person2_retirement_age),
+                step=1,
+                help=t("Employment income stops once current age reaches retirement age.", "达到退休年龄后，employment income 停止。"),
+            )
+            person2_accum_super_cost_base = currency_text_input(
+                t("Person 2 Accumulation Super Cost Base", "人物 2 累积型养老金成本基础"),
+                st.session_state.person2_accum_super_cost_base,
+                "person2_accum_super_cost_base_input",
+                help_text=t("Cost base used for super withdrawal CGT approximation in accumulation phase.", "用于 accumulation 阶段提取 CGT 近似计算的成本基础。"),
+            )
+            person2_pension_super_cost_base = currency_text_input(
+                t("Person 2 Pension Super Cost Base", "人物 2 养老金阶段成本基础"),
+                st.session_state.person2_pension_super_cost_base,
+                "person2_pension_super_cost_base_input",
+                help_text=t("Cost base carried inside the pension pool for internal tracking.", "用于 pension 池内部追踪的成本基础。"),
+            )
+        with p2c:
+            person2_pension_start_age = st.number_input(
+                t("Person 2 Pension Start Age", "人物 2 养老金开始年龄"),
+                value=int(st.session_state.person2_pension_start_age),
+                step=1,
+                help=t("Age when accumulation super can start transferring into pension phase in the model.", "模型中 accumulation super 开始转入 pension 的年龄。"),
+            )
+            person2_transfer_balance_cap = currency_text_input(
+                t("Person 2 Transfer Balance Cap", "人物 2 转移余额上限"),
+                st.session_state.person2_transfer_balance_cap,
+                "person2_transfer_balance_cap_input",
+                help_text=t("Transfer Balance Cap used when moving accumulation super to pension.", "accumulation 转 pension 时使用的 Transfer Balance Cap。"),
+            )
+            person2_annual_income = currency_text_input(
+                t("Person 2 Annual Income", "人物 2 年收入"),
+                st.session_state.person2_annual_income,
+                "person2_annual_income_input",
+                help_text=t("Gross annual employment income while still working.", "仍在工作时的税前年收入。"),
+            )
+
+    elif active_input_section == "household":
+        st.subheader(t("Household", "家庭"))
+        if is_one_person_mode:
+            st.info(
+                t(
+                    "One Person mode removes Person 2 from the model, but the household spending fields below stay exactly as entered. Reduce them manually if you want a true one-person budget.",
+                    "单人模式会把 Person 2 从模型中移除，但下面的家庭支出栏位不会自动变化。如果你希望按单人预算建模，请手动调低这些数值。",
+                )
+            )
+        hh1, hh2 = st.columns(2)
+        with hh1:
+            non_super_balance = currency_text_input(
+                t("Non-Super Balance", "非养老金资产余额"),
+                st.session_state.non_super_balance,
+                "non_super_balance_input",
+                help_text=t("Opening non-super investment pool market value.", "期初非养老金投资池市值。"),
+            )
+            annual_living_expenses = currency_text_input(
+                t("Annual Living Expenses", "年度生活支出"),
+                st.session_state.annual_living_expenses,
+                "annual_living_expenses_input",
+                help_text=t("Current annual household spending before retirement trigger applies.", "退休支出触发前的当前年度家庭支出。"),
+            )
+            cgt_discount_rate = percentage_text_input(
+                t("CGT Discount Rate", "资本利得税折扣率"),
+                float(st.session_state.cgt_discount_rate),
+                "cgt_discount_rate_input",
+                decimals=1,
+                help_text=t("Discount applied to non-super realised capital gains under the average-cost model.", "在 average-cost 模型下适用于非养老金已实现资本利得的折扣率。"),
+            )
+        with hh2:
+            non_super_cost_base = currency_text_input(
+                t("Non-Super Cost Base", "非养老金资产成本基础"),
+                st.session_state.non_super_cost_base,
+                "non_super_cost_base_input",
+                help_text=t("Cost base of the non-super investment pool. It must not exceed market value.", "非养老金投资池的成本基础，不能高于当前市值。"),
+            )
+            retirement_spending = currency_text_input(
+                t("Retirement Spending", "退休后支出"),
+                st.session_state.retirement_spending,
+                "retirement_spending_input",
+                help_text=t("Target household spending after the retirement trigger is reached. This amount is internally indexed by inflation before activation.", "达到退休触发条件后的目标家庭支出。该数值在生效前也会按 inflation 内部递增。"),
+            )
+            if is_one_person_mode:
+                st.text_input(
+                    t("Person 1 Ownership %", "人物 1 持有比例 %"),
+                    value="100.0%",
+                    disabled=True,
+                    key="non_super_ownership_person1_display",
+                    help=t("Single-person mode fixes non-super ownership to 100% Person 1.", "单人模式下非养老金持有比例固定为 Person 1 的 100%。"),
+                )
+                non_super_ownership_person1 = 100.0
+            else:
+                non_super_ownership_person1 = percentage_text_input(
+                    t("Person 1 Ownership %", "人物 1 持有比例 %"),
+                    st.session_state.non_super_ownership_person1_pct / 100.0,
+                    "non_super_ownership_person1_input",
+                    decimals=1,
+                    help_text=t("Share of non-super taxable income and tax allocated to Person 1.", "分配给 Person 1 的非养老金应税收入与税负比例。"),
+                ) * 100.0
+
+    elif active_input_section == "contributions":
+        st.subheader(t("Contribution Schedule", "缴款计划"))
+        contribution_person_options = ["Person 1"] if is_one_person_mode else ["Person 1", "Person 2"]
+
+        contribution_source_df = st.session_state.contribution_events_df.copy()
+        if is_one_person_mode and not contribution_source_df.empty:
+            contribution_source_df = contribution_source_df[contribution_source_df["person"] != "Person 2"].reset_index(drop=True)
+            st.caption(t("Single-person mode automatically ignores any existing Person 2 contribution rows.", "单人模式会自动忽略现有的 Person 2 缴款行。"))
+
+        contribution_events_df = st.data_editor(
+            contribution_source_df,
+            key="contribution_events_editor",
+            num_rows="dynamic",
             use_container_width=True,
-            hide_index=True,
             column_config={
-                t("Assumption", "假设"): st.column_config.TextColumn(t("Assumption", "假设")),
-                t("Value", "数值"): st.column_config.NumberColumn(t("Value", "数值"), format="%.1f%%"),
+                "financial_year": st.column_config.NumberColumn(
+                    t("Financial Year", "财政年度"),
+                    min_value=2000,
+                    step=1,
+                ),
+                "person": st.column_config.SelectboxColumn(
+                    t("Person", "人物"),
+                    options=contribution_person_options,
+                ),
+                "contribution_type": st.column_config.SelectboxColumn(
+                    t("Contribution Type", "缴款类型"),
+                    options=["personal_deductible", "non_concessional"],
+                ),
+                "amount": st.column_config.NumberColumn(
+                    t("Amount", "金额"),
+                    min_value=0.0,
+                    step=1000.0,
+                    format="$%.0f",
+                ),
             },
         )
 
-        super_income_return_mean = float(selected_values["super_income_return_mean"])
-        super_income_return_std = float(selected_values["super_income_return_std"])
-        super_capital_return_mean = float(selected_values["super_capital_return_mean"])
-        super_capital_return_std = float(selected_values["super_capital_return_std"])
-        non_super_income_return_mean = float(selected_values["non_super_income_return_mean"])
-        non_super_income_return_std = float(selected_values["non_super_income_return_std"])
-        non_super_capital_return_mean = float(selected_values["non_super_capital_return_mean"])
-        non_super_capital_return_std = float(selected_values["non_super_capital_return_std"])
-        inflation_rate = float(selected_values["inflation_rate"])
+    elif active_input_section == "returns":
+        if scenario_mode == "Single Scenario" and preset_choice == "Custom":
+            st.subheader(t("Return Assumptions", "回报假设"))
+            r1, r2, r3 = st.columns(3)
+            with r1:
+                super_income_return_mean = percentage_text_input(
+                    t("Super Income Return Mean", "养老金收益型回报均值"),
+                    st.session_state.super_income_return_mean,
+                    "super_income_return_mean_input",
+                    decimals=1,
+                    help_text=t("Expected annual income-style return on super assets.", "养老金资产的年度收益型回报假设。"),
+                )
+                super_capital_return_mean = percentage_text_input(
+                    t("Super Capital Return Mean", "养老金资本增值回报均值"),
+                    st.session_state.super_capital_return_mean,
+                    "super_capital_return_mean_input",
+                    decimals=1,
+                    help_text=t("Expected annual capital growth on super assets.", "养老金资产的年度资本增值回报假设。"),
+                )
+                inflation_rate = percentage_text_input(
+                    t("Inflation Rate", "通胀率"),
+                    st.session_state.inflation_rate,
+                    "inflation_rate_input",
+                    decimals=1,
+                    help_text=t("Inflation used to index salary and spending assumptions.", "用于收入与支出递增的 inflation 假设。"),
+                )
+            with r2:
+                super_income_return_std = percentage_text_input(
+                    t("Super Income Return Std", "养老金收益型回报波动"),
+                    st.session_state.super_income_return_std,
+                    "super_income_return_std_input",
+                    decimals=1,
+                )
+                super_capital_return_std = percentage_text_input(
+                    t("Super Capital Return Std", "养老金资本增值回报波动"),
+                    st.session_state.super_capital_return_std,
+                    "super_capital_return_std_input",
+                    decimals=1,
+                )
+            with r3:
+                non_super_income_return_mean = percentage_text_input(
+                    t("Non-Super Income Return Mean", "非养老金收益型回报均值"),
+                    st.session_state.non_super_income_return_mean,
+                    "non_super_income_return_mean_input",
+                    decimals=1,
+                )
+                non_super_capital_return_mean = percentage_text_input(
+                    t("Non-Super Capital Return Mean", "非养老金资本增值回报均值"),
+                    st.session_state.non_super_capital_return_mean,
+                    "non_super_capital_return_mean_input",
+                    decimals=1,
+                )
+                non_super_income_return_std = percentage_text_input(
+                    t("Non-Super Income Return Std", "非养老金收益型回报波动"),
+                    st.session_state.non_super_income_return_std,
+                    "non_super_income_return_std_input",
+                    decimals=1,
+                )
+                non_super_capital_return_std = percentage_text_input(
+                    t("Non-Super Capital Return Std", "非养老金资本增值回报波动"),
+                    st.session_state.non_super_capital_return_std,
+                    "non_super_capital_return_std_input",
+                    decimals=1,
+                )
+        else:
+            selected_preset = preset_choice if preset_choice in runtime_presets else "Base Case"
+            selected_values = runtime_presets[selected_preset]
 
-elif active_input_section == "simulation":
-    st.subheader(t("Simulation", "模拟设置"))
-    sim1, sim2 = st.columns(2)
-    with sim1:
-        number_of_simulations = st.number_input(
-            t("Number of Simulations", "模拟次数"),
-            value=int(st.session_state.number_of_simulations),
-            step=1000,
-        )
-    with sim2:
-        random_seed = st.number_input(
-            t("Random Seed", "随机种子"),
-            value=int(st.session_state.random_seed),
-            step=1,
-        )
+            st.subheader(t("Return Assumptions", "回报假设"))
+            st.info(
+                t(
+                    f"Using values from Assumption Settings Panel: {selected_preset}",
+                    f"使用假设设置面板中的参数：{selected_preset}",
+                )
+            )
+
+            display_df = pd.DataFrame(
+                {
+                    t("Assumption", "假设"): [
+                        t("Super Income Return Mean", "养老金收益型回报均值"),
+                        t("Super Income Return Std", "养老金收益型回报波动"),
+                        t("Super Capital Return Mean", "养老金资本增值回报均值"),
+                        t("Super Capital Return Std", "养老金资本增值回报波动"),
+                        t("Non-Super Income Return Mean", "非养老金收益型回报均值"),
+                        t("Non-Super Income Return Std", "非养老金收益型回报波动"),
+                        t("Non-Super Capital Return Mean", "非养老金资本增值回报均值"),
+                        t("Non-Super Capital Return Std", "非养老金资本增值回报波动"),
+                        t("Inflation Rate", "通胀率"),
+                    ],
+                    t("Value", "数值"): [
+                        selected_values["super_income_return_mean"] * 100.0,
+                        selected_values["super_income_return_std"] * 100.0,
+                        selected_values["super_capital_return_mean"] * 100.0,
+                        selected_values["super_capital_return_std"] * 100.0,
+                        selected_values["non_super_income_return_mean"] * 100.0,
+                        selected_values["non_super_income_return_std"] * 100.0,
+                        selected_values["non_super_capital_return_mean"] * 100.0,
+                        selected_values["non_super_capital_return_std"] * 100.0,
+                        selected_values["inflation_rate"] * 100.0,
+                    ],
+                }
+            )
+            st.dataframe(
+                display_df,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    t("Assumption", "假设"): st.column_config.TextColumn(t("Assumption", "假设")),
+                    t("Value", "数值"): st.column_config.NumberColumn(t("Value", "数值"), format="%.1f%%"),
+                },
+            )
+
+            super_income_return_mean = float(selected_values["super_income_return_mean"])
+            super_income_return_std = float(selected_values["super_income_return_std"])
+            super_capital_return_mean = float(selected_values["super_capital_return_mean"])
+            super_capital_return_std = float(selected_values["super_capital_return_std"])
+            non_super_income_return_mean = float(selected_values["non_super_income_return_mean"])
+            non_super_income_return_std = float(selected_values["non_super_income_return_std"])
+            non_super_capital_return_mean = float(selected_values["non_super_capital_return_mean"])
+            non_super_capital_return_std = float(selected_values["non_super_capital_return_std"])
+            inflation_rate = float(selected_values["inflation_rate"])
+
+    elif active_input_section == "simulation":
+        st.subheader(t("Simulation", "模拟设置"))
+        sim1, sim2 = st.columns(2)
+        with sim1:
+            st.metric(t("Number of Simulations", "模拟次数"), f"{int(st.session_state.number_of_simulations):,}")
+            st.caption(t("Controlled by Simulation Depth in the sidebar.", "由侧边栏的模拟深度控制。"))
+            number_of_simulations = int(st.session_state.number_of_simulations)
+        with sim2:
+            random_seed = st.number_input(
+                t("Random Seed", "随机种子"),
+                value=int(st.session_state.random_seed),
+                step=1,
+            )
         
+
+
+    apply_inputs_button = st.form_submit_button(t("Apply Inputs", "应用输入"), use_container_width=True)
+    if apply_inputs_button:
+        st.toast(t("Inputs applied.", "输入已应用。"))
 
 # ============================================================
 # SECTION: SESSION UPDATE
@@ -1846,6 +2306,9 @@ st.session_state.projection_years = int(projection_years)
 st.session_state.retirement_spending_trigger = retirement_spending_trigger
 st.session_state.household_mode = household_mode
 st.session_state.value_mode = value_mode
+st.session_state.workspace_mode = workspace_mode
+st.session_state.show_assumption_panel = bool(show_assumption_panel)
+st.session_state.show_live_input_checks = bool(show_live_input_checks)
 st.session_state.report_title = report_title
 st.session_state.person1_name = person1_name
 st.session_state.person2_name = person2_name
@@ -1968,7 +2431,10 @@ base_inputs = {
     "person2_pension_super_cost_base": 0.0 if is_one_person_mode else float(st.session_state.person2_pension_super_cost_base),
 }
 
-render_live_input_feedback(base_inputs)
+if show_live_input_checks:
+    render_live_input_feedback(base_inputs)
+else:
+    render_light_input_badges(base_inputs)
 
 # ============================================================
 # SECTION: RUN LOGIC
@@ -2010,38 +2476,20 @@ if run_button:
         output_warnings_by_scenario = {}
 
         for scenario_name, scenario_inputs in scenario_inputs_map.items():
-            det_df = run_deterministic_projection(scenario_inputs)
-            summary_df, all_paths_df = run_monte_carlo(
+            scenario_result = run_scenario_cached(
                 scenario_inputs,
-                random_seed=int(random_seed),
+                int(random_seed),
+                cache_version="performance_v2",
             )
-            percentile_df = build_percentile_table(all_paths_df)
-            failure_prob_df = build_failure_probability_by_age(all_paths_df)
-
-            success_rate = summary_df["success"].mean()
-            median_final_wealth = summary_df["final_wealth"].median()
-            p10_final_wealth = summary_df["final_wealth"].quantile(0.10)
-            p90_final_wealth = summary_df["final_wealth"].quantile(0.90)
 
             input_warnings_by_scenario[scenario_name] = generate_input_warnings(scenario_inputs)
             output_warnings_by_scenario[scenario_name] = generate_output_warnings(
-                summary_df,
-                failure_prob_df,
-                det_df,
+                scenario_result["summary_df"],
+                scenario_result["failure_prob_df"],
+                scenario_result["det_df"],
             )
 
-            comparison_results[scenario_name] = {
-                "inputs": scenario_inputs,
-                "det_df": det_df,
-                "summary_df": summary_df,
-                "all_paths_df": all_paths_df,
-                "percentile_df": percentile_df,
-                "failure_prob_df": failure_prob_df,
-                "success_rate": success_rate,
-                "median_final_wealth": median_final_wealth,
-                "p10_final_wealth": p10_final_wealth,
-                "p90_final_wealth": p90_final_wealth,
-            }
+            comparison_results[scenario_name] = scenario_result
 
         st.session_state.comparison_results = comparison_results
         st.session_state.assumption_details_df = build_assumption_details_df(scenario_inputs_map)
@@ -2051,6 +2499,7 @@ if run_button:
         st.session_state.output_warnings_by_scenario = output_warnings_by_scenario
         st.session_state.last_run_inputs_by_scenario = scenario_inputs_map
         st.session_state.active_result_set_name = "Current Results"
+        st.session_state.workspace_mode = "View Results"
 
 
 # ============================================================
@@ -2059,7 +2508,7 @@ if run_button:
 
 active_result_bundle = get_active_result_bundle()
 
-if active_result_bundle is not None:
+if active_result_bundle is not None and workspace_mode == "View Results":
     comparison_results = active_result_bundle["comparison_results"]
     assumption_details_df = active_result_bundle["assumption_details_df"]
     input_summary_df = active_result_bundle["input_summary_df"]
@@ -2115,24 +2564,6 @@ if active_result_bundle is not None:
     det_single_compare_df["scenario"] = selected_scenario
 
     if view_mode == t("Adviser View", "顾问视图"):
-        render_saved_result_comparison_section(st.session_state.get("saved_result_sets", {}), value_mode)
-        render_assumption_details(assumption_details_df)
-        render_warning_sections(input_warnings_by_scenario, output_warnings_by_scenario, view_mode)
-
-        st.subheader(t("Scenario Comparison Summary", "情景比较摘要"))
-        st.dataframe(
-            comparison_df[["scenario", "success_rate_label", "median_final_wealth_label", "p10_final_wealth_label", "p90_final_wealth_label"]],
-            use_container_width=True,
-        )
-
-        success_fig = create_success_rate_comparison_chart(comparison_df)
-        success_fig.update_layout(title=t("Success Rate by Scenario", "各情景成功率"), xaxis_title=t("Scenario", "情景"), yaxis_title=t("Success Rate", "成功率"))
-        st.plotly_chart(success_fig, use_container_width=True, key="success_rate_comparison")
-
-        median_fig = create_median_wealth_comparison_chart(comparison_df)
-        median_fig.update_layout(title=t("Median Final Wealth by Scenario", "各情景最终财富中位数"), xaxis_title=t("Scenario", "情景"), yaxis_title=t("Median Final Wealth", "最终财富中位数"))
-        st.plotly_chart(median_fig, use_container_width=True, key="median_wealth_comparison")
-
         st.subheader(t(f"Adviser Summary - {selected_scenario}", f"顾问摘要 - {selected_scenario}"))
         st.info(t("Adviser Note: Outputs are indicative only and should be reviewed in the context of client objectives, risk profile, and current legislation before forming advice.", "顾问提示：本输出仅供指示参考，在形成建议前应结合客户目标、风险承受能力及现行法规进行审阅。"))
 
@@ -2144,79 +2575,149 @@ if active_result_bundle is not None:
         bottom_col2.metric(t("P90 Final Wealth", "P90 最终财富"), f"${selected_p90_final_wealth:,.0f}")
         bottom_col3.metric(t("Spread (P90 - P10)", "区间差值（P90 - P10）"), f"${selected_p90_final_wealth - selected_p10_final_wealth:,.0f}")
 
-        missing_validation_cols = get_missing_validation_columns(display_det_df, selected_result["inputs"])
-        if missing_validation_cols:
-            st.warning(t("Validation table is using fallback zeros for missing columns.", "验证表对缺失栏位使用了回退零值。"))
-            st.caption(", ".join(missing_validation_cols))
+        adviser_sections = [
+            t("Overview", "总览"),
+            t("Wealth Charts", "财富图表"),
+            t("Monte Carlo", "蒙特卡洛"),
+            t("Tax", "税务"),
+            t("Cashflow", "现金流"),
+            t("Debug Tables", "调试表"),
+            t("Export", "导出"),
+        ]
+        adviser_result_section = st.radio(
+            t("Adviser Display Section", "顾问显示区"),
+            options=adviser_sections,
+            horizontal=True,
+            key="adviser_result_section_selector",
+            help=t("Only the selected section is rendered. This keeps result navigation fast.", "只渲染当前选择的区域，从而提升结果页切换速度。"),
+        )
 
-        st.subheader(t("Adviser Charts", "顾问图表"))
+        if adviser_result_section == t("Overview", "总览"):
+            render_saved_result_comparison_section(st.session_state.get("saved_result_sets", {}), value_mode)
+            render_assumption_details(assumption_details_df)
+            render_warning_sections(input_warnings_by_scenario, output_warnings_by_scenario, view_mode)
 
-        det_all_fig = create_deterministic_wealth_chart_comparison(det_scenarios_df, common_inputs)
-        det_all_fig.update_layout(title=t("Deterministic Total Wealth Projection", "确定性总财富预测"), xaxis_title=t("Financial Year", "财政年度"), yaxis_title=t("Total Wealth", "总财富"))
-        st.plotly_chart(det_all_fig, use_container_width=True, key=chart_key("deterministic_all", selected_scenario, view_mode, "adviser"))
+            st.subheader(t("Scenario Comparison Summary", "情景比较摘要"))
+            st.dataframe(
+                comparison_df[["scenario", "success_rate_label", "median_final_wealth_label", "p10_final_wealth_label", "p90_final_wealth_label"]],
+                use_container_width=True,
+            )
 
-        percentile_fig = create_percentile_paths_chart(display_percentile_df, selected_result["inputs"], t(f"Monte Carlo Percentile Paths - {selected_scenario}", f"蒙特卡洛百分位路径 - {selected_scenario}"))
-        percentile_fig.update_layout(xaxis_title=t("Financial Year", "财政年度"), yaxis_title=t("Total Wealth", "总财富"))
-        st.plotly_chart(percentile_fig, use_container_width=True, key=chart_key("percentile", selected_scenario, view_mode, "adviser"))
+            success_fig = create_success_rate_comparison_chart(comparison_df)
+            success_fig.update_layout(title=t("Success Rate by Scenario", "各情景成功率"), xaxis_title=t("Scenario", "情景"), yaxis_title=t("Success Rate", "成功率"))
+            st.plotly_chart(success_fig, use_container_width=True, key="success_rate_comparison")
 
-        failure_fig = create_failure_probability_chart(selected_result["failure_prob_df"], selected_result["inputs"], t(f"Cumulative Probability of Running Out of Money - {selected_scenario}", f"资金耗尽累计概率 - {selected_scenario}"))
-        failure_fig.update_layout(xaxis_title=t("Financial Year", "财政年度"), yaxis_title=t("Failure Probability", "资金耗尽概率"))
-        st.plotly_chart(failure_fig, use_container_width=True, key=chart_key("failure", selected_scenario, view_mode, "adviser"))
+            median_fig = create_median_wealth_comparison_chart(comparison_df)
+            median_fig.update_layout(title=t("Median Final Wealth by Scenario", "各情景最终财富中位数"), xaxis_title=t("Scenario", "情景"), yaxis_title=t("Median Final Wealth", "最终财富中位数"))
+            st.plotly_chart(median_fig, use_container_width=True, key="median_wealth_comparison")
 
-        histogram_fig = create_histogram(display_summary_df, show_p10=True, show_p50=True, show_p90=True, title_text=t(f"Distribution of Final Wealth - {selected_scenario}", f"最终财富分布 - {selected_scenario}"))
-        histogram_fig.update_layout(xaxis_title=t("Final Wealth", "最终财富"), yaxis_title=t("Frequency", "次数"))
-        st.plotly_chart(histogram_fig, use_container_width=True, key=chart_key("histogram", selected_scenario, view_mode, "adviser"))
+        elif adviser_result_section == t("Wealth Charts", "财富图表"):
+            st.subheader(t("Wealth Charts", "财富图表"))
+            det_all_fig = create_deterministic_wealth_chart_comparison(det_scenarios_df, common_inputs)
+            det_all_fig.update_layout(title=t("Deterministic Total Wealth Projection", "确定性总财富预测"), xaxis_title=t("Financial Year", "财政年度"), yaxis_title=t("Total Wealth", "总财富"))
+            st.plotly_chart(det_all_fig, use_container_width=True, key=chart_key("deterministic_all", selected_scenario, view_mode, "adviser_lazy"))
 
-        income_spending_fig = create_income_vs_spending_chart(display_det_df, selected_result["inputs"], t(f"Income vs Spending - {selected_scenario}", f"收入与支出 - {selected_scenario}"))
-        income_spending_fig.update_layout(xaxis_title=t("Financial Year", "财政年度"), yaxis_title=t("Annual Amount", "年度金额"))
-        st.plotly_chart(income_spending_fig, use_container_width=True, key=chart_key("income_spending", selected_scenario, view_mode, "adviser"))
+            income_spending_fig = create_income_vs_spending_chart(display_det_df, selected_result["inputs"], t(f"Income vs Spending - {selected_scenario}", f"收入与支出 - {selected_scenario}"))
+            income_spending_fig.update_layout(xaxis_title=t("Financial Year", "财政年度"), yaxis_title=t("Annual Amount", "年度金额"))
+            st.plotly_chart(income_spending_fig, use_container_width=True, key=chart_key("income_spending", selected_scenario, view_mode, "adviser_lazy"))
 
-        tax_breakdown_fig = create_tax_breakdown_chart(display_det_df, selected_result["inputs"], t(f"Tax Breakdown - {selected_scenario}", f"税务明细 - {selected_scenario}"))
-        tax_breakdown_fig.update_layout(xaxis_title=t("Financial Year", "财政年度"), yaxis_title=t("Annual Tax", "年度税款"))
-        st.plotly_chart(tax_breakdown_fig, use_container_width=True, key=chart_key("tax_breakdown", selected_scenario, view_mode, "adviser"))
+        elif adviser_result_section == t("Monte Carlo", "蒙特卡洛"):
+            st.subheader(t("Monte Carlo", "蒙特卡洛"))
+            percentile_fig = create_percentile_paths_chart(display_percentile_df, selected_result["inputs"], t(f"Monte Carlo Percentile Paths - {selected_scenario}", f"蒙特卡洛百分位路径 - {selected_scenario}"))
+            percentile_fig.update_layout(xaxis_title=t("Financial Year", "财政年度"), yaxis_title=t("Total Wealth", "总财富"))
+            st.plotly_chart(percentile_fig, use_container_width=True, key=chart_key("percentile", selected_scenario, view_mode, "adviser_lazy"))
 
-        total_tax_fig = create_total_tax_paid_chart(display_det_df, selected_result["inputs"], t(f"Total Tax Paid - {selected_scenario}", f"总税款 - {selected_scenario}"))
-        total_tax_fig.update_layout(xaxis_title=t("Financial Year", "财政年度"), yaxis_title=t("Annual Tax", "年度税款"))
-        st.plotly_chart(total_tax_fig, use_container_width=True, key=chart_key("total_tax", selected_scenario, view_mode, "adviser"))
+            failure_fig = create_failure_probability_chart(selected_result["failure_prob_df"], selected_result["inputs"], t(f"Cumulative Probability of Running Out of Money - {selected_scenario}", f"资金耗尽累计概率 - {selected_scenario}"))
+            failure_fig.update_layout(xaxis_title=t("Financial Year", "财政年度"), yaxis_title=t("Failure Probability", "资金耗尽概率"))
+            st.plotly_chart(failure_fig, use_container_width=True, key=chart_key("failure", selected_scenario, view_mode, "adviser_lazy"))
 
-        adviser_cashflow_df = build_adviser_cashflow_df(display_det_df)
-        st.subheader(t("Adviser Cashflow Summary", "顾问现金流摘要"))
-        st.dataframe(adviser_cashflow_df, use_container_width=True)
+            histogram_fig = create_histogram(display_summary_df, show_p10=True, show_p50=True, show_p90=True, title_text=t(f"Distribution of Final Wealth - {selected_scenario}", f"最终财富分布 - {selected_scenario}"))
+            histogram_fig.update_layout(xaxis_title=t("Final Wealth", "最终财富"), yaxis_title=t("Frequency", "次数"))
+            st.plotly_chart(histogram_fig, use_container_width=True, key=chart_key("histogram", selected_scenario, view_mode, "adviser_lazy"))
 
-        pension_tax_free_summary_df = build_pension_tax_free_summary_df(display_det_df, selected_result["inputs"])
-        st.subheader(t("Pension Tax-Free Validation Summary", "退休金免税验证摘要"))
-        st.dataframe(pension_tax_free_summary_df, use_container_width=True)
+        elif adviser_result_section == t("Tax", "税务"):
+            st.subheader(t("Tax", "税务"))
+            tax_breakdown_fig = create_tax_breakdown_chart(display_det_df, selected_result["inputs"], t(f"Tax Breakdown - {selected_scenario}", f"税务明细 - {selected_scenario}"))
+            tax_breakdown_fig.update_layout(xaxis_title=t("Financial Year", "财政年度"), yaxis_title=t("Annual Tax", "年度税款"))
+            st.plotly_chart(tax_breakdown_fig, use_container_width=True, key=chart_key("tax_breakdown", selected_scenario, view_mode, "adviser_lazy"))
 
-        debug_df = build_adviser_debug_df(display_det_df, selected_result["inputs"])
-        st.subheader(t("Adviser Debug Table", "顾问调试表"))
-        st.dataframe(debug_df, use_container_width=True)
+            total_tax_fig = create_total_tax_paid_chart(display_det_df, selected_result["inputs"], t(f"Total Tax Paid - {selected_scenario}", f"总税款 - {selected_scenario}"))
+            total_tax_fig.update_layout(xaxis_title=t("Financial Year", "财政年度"), yaxis_title=t("Annual Tax", "年度税款"))
+            st.plotly_chart(total_tax_fig, use_container_width=True, key=chart_key("total_tax", selected_scenario, view_mode, "adviser_lazy"))
 
-        cgt_validation_df = build_cgt_validation_df(display_det_df, selected_result["inputs"])
-        with st.expander(t("Detailed CGT / Pension Validation Table", "详细 CGT / 退休金验证表"), expanded=False):
-            st.dataframe(cgt_validation_df, use_container_width=True)
-        with st.expander(t("Deterministic Projection Table", "确定性预测明细表"), expanded=False):
-            st.dataframe(display_det_df, use_container_width=True)
-        with st.expander(t("Monte Carlo Simulation Summary Table", "蒙特卡洛模拟摘要表"), expanded=False):
-            st.dataframe(display_summary_df, use_container_width=True)
-        with st.expander(t("Monte Carlo Percentile Table", "蒙特卡洛百分位表"), expanded=False):
-            st.dataframe(display_percentile_df, use_container_width=True)
-        with st.expander(t("Failure Probability Table", "资金耗尽概率表"), expanded=False):
-            st.dataframe(selected_result["failure_prob_df"], use_container_width=True)
+            pension_tax_free_summary_df = build_pension_tax_free_summary_df(display_det_df, selected_result["inputs"])
+            st.subheader(t("Pension Tax-Free Validation Summary", "退休金免税验证摘要"))
+            st.dataframe(pension_tax_free_summary_df, use_container_width=True)
 
-        excel_file = dataframe_to_excel_bytes({
-            "input_summary": input_summary_df,
-            "assumption_details": assumption_details_df,
-            "contribution_schedule": contribution_schedule_export_df,
-            "deterministic_projection": display_det_df,
-            "simulation_summary": display_summary_df,
-            "percentile_table": display_percentile_df,
-            "failure_probability": selected_result["failure_prob_df"],
-            "adviser_cashflow_summary": adviser_cashflow_df,
-            "adviser_debug_table": debug_df,
-            "pension_tax_free_summary": pension_tax_free_summary_df,
-            "cgt_validation_detail": cgt_validation_df,
-        })
-        st.download_button(label=t("Download Excel", "下载 Excel"), data=excel_file, file_name=build_export_filename(selected_result["inputs"].get("report_title", ""), "financial_projection", selected_scenario, "xlsx"), mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        elif adviser_result_section == t("Cashflow", "现金流"):
+            st.subheader(t("Cashflow", "现金流"))
+            adviser_cashflow_df = build_adviser_cashflow_df(display_det_df)
+            st.subheader(t("Adviser Cashflow Summary", "顾问现金流摘要"))
+            st.dataframe(adviser_cashflow_df, use_container_width=True)
+
+            adviser_cashflow_asset_movement_tax_df = build_adviser_cashflow_asset_movement_tax_df(display_det_df, selected_result["inputs"])
+            st.subheader(t("Cashflow, Net Asset Movement & Income Tax by Person", "现金流、净资产变动与个人所得税明细"))
+            st.caption(t(
+                "This table separates cashflow, net asset movement, and total income tax per person for adviser review.",
+                "该表将现金流、净资产变动以及每个人的总所得税拆开，供顾问审阅。",
+            ))
+            st.dataframe(adviser_cashflow_asset_movement_tax_df, use_container_width=True)
+
+        elif adviser_result_section == t("Debug Tables", "调试表"):
+            st.subheader(t("Debug Tables", "调试表"))
+            missing_validation_cols = get_missing_validation_columns(display_det_df, selected_result["inputs"])
+            if missing_validation_cols:
+                st.warning(t("Validation table is using fallback zeros for missing columns.", "验证表对缺失栏位使用了回退零值。"))
+                st.caption(", ".join(missing_validation_cols))
+
+            debug_df = build_adviser_debug_df(display_det_df, selected_result["inputs"])
+            st.subheader(t("Adviser Debug Table", "顾问调试表"))
+            st.dataframe(debug_df, use_container_width=True)
+
+            if st.checkbox(t("Show detailed CGT / pension validation table", "显示详细 CGT / 退休金验证表"), value=False):
+                cgt_validation_df = build_cgt_validation_df(display_det_df, selected_result["inputs"])
+                st.dataframe(cgt_validation_df, use_container_width=True)
+
+            if st.checkbox(t("Show full deterministic projection table", "显示完整确定性预测表"), value=False):
+                key_cols = [col for col in ["financial_year_end", "total_wealth", "ending_total_super_balance", "ending_non_super_balance", "spending", "total_tax_paid", "unmet_shortfall"] if col in display_det_df.columns]
+                st.dataframe(display_det_df[key_cols], use_container_width=True)
+
+            if st.checkbox(t("Show Monte Carlo summary tables", "显示蒙特卡洛摘要表"), value=False):
+                st.dataframe(display_summary_df[[col for col in ["simulation_id", "success", "final_wealth"] if col in display_summary_df.columns]], use_container_width=True)
+                st.dataframe(display_percentile_df, use_container_width=True)
+                st.dataframe(selected_result["failure_prob_df"], use_container_width=True)
+
+        elif adviser_result_section == t("Export", "导出"):
+            st.subheader(t("Export", "导出"))
+            st.caption(t("Excel is prepared only on demand to avoid slowing down result navigation.", "Excel 只在需要时生成，避免拖慢结果页切换。"))
+            prepare_export = st.button(t("Prepare Excel Export", "准备 Excel 导出"), use_container_width=True)
+            if prepare_export:
+                adviser_cashflow_df = build_adviser_cashflow_df(display_det_df)
+                adviser_cashflow_asset_movement_tax_df = build_adviser_cashflow_asset_movement_tax_df(display_det_df, selected_result["inputs"])
+                pension_tax_free_summary_df = build_pension_tax_free_summary_df(display_det_df, selected_result["inputs"])
+                debug_df = build_adviser_debug_df(display_det_df, selected_result["inputs"])
+                cgt_validation_df = build_cgt_validation_df(display_det_df, selected_result["inputs"])
+                excel_file = dataframe_to_excel_bytes({
+                    "input_summary": input_summary_df,
+                    "assumption_details": assumption_details_df,
+                    "contribution_schedule": contribution_schedule_export_df,
+                    "deterministic_projection": display_det_df,
+                    "simulation_summary": display_summary_df,
+                    "percentile_table": display_percentile_df,
+                    "failure_probability": selected_result["failure_prob_df"],
+                    "adviser_cashflow_summary": adviser_cashflow_df,
+                    "cashflow_asset_tax_detail": adviser_cashflow_asset_movement_tax_df,
+                    "adviser_debug_table": debug_df,
+                    "pension_tax_free_summary": pension_tax_free_summary_df,
+                    "cgt_validation_detail": cgt_validation_df,
+                })
+                st.download_button(
+                    label=t("Download Excel", "下载 Excel"),
+                    data=excel_file,
+                    file_name=build_export_filename(selected_result["inputs"].get("report_title", ""), "financial_projection", selected_scenario, "xlsx"),
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                )
 
     else:
         st.subheader(t(f"Client Summary - {selected_scenario}", f"客户摘要 - {selected_scenario}"))
@@ -2238,5 +2739,10 @@ if active_result_bundle is not None:
         failure_fig.update_layout(xaxis_title=t("Financial Year", "财政年度"), yaxis_title=t("Failure Probability", "资金耗尽概率"))
         st.plotly_chart(failure_fig, use_container_width=True, key=chart_key("failure", selected_scenario, view_mode, "client"))
 
+elif active_result_bundle is not None and workspace_mode != "View Results":
+    st.info(t(
+        "Results are available but hidden while you are editing inputs. Switch Workspace to 'View Results' in the sidebar to render charts and tables.",
+        "结果已经存在，但在编辑输入时已隐藏以提升速度。请在侧边栏把工作区切换为“查看结果”来显示图表和表格。",
+    ))
 else:
     st.info(t("Adjust the inputs above, then click Run Simulation in the sidebar. Saved snapshots can also be reopened from the sidebar.", "请先在上方区域调整输入，再点击侧边栏中的“运行模拟”。已保存快照也可以在侧边栏重新打开。"))

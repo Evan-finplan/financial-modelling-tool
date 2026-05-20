@@ -1,7 +1,9 @@
-[server]
-headless = true
-enableCORS = false
-enableXsrfProtection = true
-
 [theme]
 base = "light"
+
+[server]
+headless = true
+runOnSave = true
+
+[browser]
+gatherUsageStats = false
