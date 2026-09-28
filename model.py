@@ -4,10 +4,14 @@ import numpy as np
 import pandas as pd
 
 from policy import (
+    DISCRETIONARY_TRUST_MINIMUM_TAX_RATE,
+    DISCRETIONARY_TRUST_MINIMUM_TAX_START_FY,
+    DISCRETIONARY_TRUST_MINIMUM_TAX_STATUS,
     DIVISION_293_TAX_RATE,
     DIVISION_293_THRESHOLD,
     LATEST_PUBLISHED_SUPER_THRESHOLD_FY,
     MEDICARE_LEVY_RATE,
+    NEGATIVE_GEARING_RESTRICTION_START_FY,
     PERSONAL_TAX_SCHEDULES,
     SUPER_CONTRIBUTIONS_TAX_RATE,
     SUPER_EARNINGS_TAX_RATE,
@@ -402,6 +406,138 @@ def split_income_tax_and_medicare(allocated_tax, tax_result):
     return income_tax_component, medicare_component
 
 
+def calculate_residential_property_year(
+    gross_rent,
+    deductible_operating_expenses,
+    loan_interest,
+    opening_quarantined_loss,
+    financial_year_end,
+    acquired_before_budget_time=False,
+    is_new_build=False,
+    is_exempt_housing=False,
+):
+    """Apply the legislated residential loss-quarantine rules for one year.
+
+    The model aggregates one residential investment activity. It does not
+    attempt property-by-property ordering or CGT treatment on disposal.
+    """
+    gross_rent = max(float(gross_rent), 0.0)
+    deductible_operating_expenses = max(float(deductible_operating_expenses), 0.0)
+    loan_interest = max(float(loan_interest), 0.0)
+    opening_quarantined_loss = max(float(opening_quarantined_loss), 0.0)
+    total_deductions = deductible_operating_expenses + loan_interest
+    net_rental_result = gross_rent - total_deductions
+
+    restriction_applies = (
+        int(financial_year_end) >= NEGATIVE_GEARING_RESTRICTION_START_FY
+        and not bool(acquired_before_budget_time)
+        and not bool(is_new_build)
+        and not bool(is_exempt_housing)
+    )
+
+    if not restriction_applies:
+        return {
+            "gross_rent": gross_rent,
+            "deductible_operating_expenses": deductible_operating_expenses,
+            "loan_interest": loan_interest,
+            "total_deductions": total_deductions,
+            "net_cashflow": net_rental_result,
+            "taxable_rental_income": net_rental_result,
+            "current_year_quarantined_loss": 0.0,
+            "quarantined_loss_used": 0.0,
+            "opening_quarantined_loss": opening_quarantined_loss,
+            "closing_quarantined_loss": opening_quarantined_loss,
+            "restriction_applies": False,
+        }
+
+    if net_rental_result < 0:
+        current_year_quarantined_loss = -net_rental_result
+        quarantined_loss_used = 0.0
+        taxable_rental_income = 0.0
+        closing_quarantined_loss = opening_quarantined_loss + current_year_quarantined_loss
+    else:
+        quarantined_loss_used = min(opening_quarantined_loss, net_rental_result)
+        current_year_quarantined_loss = 0.0
+        taxable_rental_income = net_rental_result - quarantined_loss_used
+        closing_quarantined_loss = opening_quarantined_loss - quarantined_loss_used
+
+    return {
+        "gross_rent": gross_rent,
+        "deductible_operating_expenses": deductible_operating_expenses,
+        "loan_interest": loan_interest,
+        "total_deductions": total_deductions,
+        "net_cashflow": net_rental_result,
+        "taxable_rental_income": taxable_rental_income,
+        "current_year_quarantined_loss": current_year_quarantined_loss,
+        "quarantined_loss_used": quarantined_loss_used,
+        "opening_quarantined_loss": opening_quarantined_loss,
+        "closing_quarantined_loss": closing_quarantined_loss,
+        "restriction_applies": True,
+    }
+
+
+def calculate_discretionary_trust_minimum_tax(
+    trust_net_income,
+    excluded_income,
+    financial_year_end,
+    subject_to_minimum_tax=True,
+):
+    """Estimate the September 2026 exposure-draft trust minimum tax."""
+    trust_net_income = max(float(trust_net_income), 0.0)
+    excluded_income = min(max(float(excluded_income), 0.0), trust_net_income)
+    in_scope_income = max(trust_net_income - excluded_income, 0.0)
+    applies = (
+        bool(subject_to_minimum_tax)
+        and int(financial_year_end) >= DISCRETIONARY_TRUST_MINIMUM_TAX_START_FY
+    )
+    trustee_minimum_tax = (
+        in_scope_income * DISCRETIONARY_TRUST_MINIMUM_TAX_RATE if applies else 0.0
+    )
+    return {
+        "trust_net_income": trust_net_income,
+        "excluded_income": excluded_income,
+        "minimum_tax_income": in_scope_income if applies else 0.0,
+        "trustee_minimum_tax": trustee_minimum_tax,
+        "minimum_tax_applies": applies,
+        "minimum_tax_rate": DISCRETIONARY_TRUST_MINIMUM_TAX_RATE,
+        "policy_status": DISCRETIONARY_TRUST_MINIMUM_TAX_STATUS,
+    }
+
+
+def calculate_incremental_budget_tax(
+    base_taxable_income,
+    residential_taxable_income,
+    trust_taxable_income,
+    trust_tax_credit,
+    tax_schedule_key,
+):
+    """Calculate incremental individual tax and cap the trust credit at tax payable."""
+    base_taxable_income = max(float(base_taxable_income), 0.0)
+    residential_taxable_income = float(residential_taxable_income)
+    trust_taxable_income = max(float(trust_taxable_income), 0.0)
+    trust_tax_credit = max(float(trust_tax_credit), 0.0)
+
+    after_property_income = max(base_taxable_income + residential_taxable_income, 0.0)
+    after_trust_income = after_property_income + trust_taxable_income
+    base_tax = calculate_personal_income_tax(base_taxable_income, tax_schedule_key)["personal_tax_total"]
+    after_property_tax = calculate_personal_income_tax(after_property_income, tax_schedule_key)["personal_tax_total"]
+    after_trust_tax = calculate_personal_income_tax(after_trust_income, tax_schedule_key)["personal_tax_total"]
+
+    property_tax_adjustment = after_property_tax - base_tax
+    tax_attributable_to_trust = max(after_trust_tax - after_property_tax, 0.0)
+    allowed_trust_credit = min(trust_tax_credit, tax_attributable_to_trust)
+    beneficiary_trust_tax_after_credit = tax_attributable_to_trust - allowed_trust_credit
+
+    return {
+        "adjusted_taxable_income": after_trust_income,
+        "property_tax_adjustment": property_tax_adjustment,
+        "trust_tax_before_credit": tax_attributable_to_trust,
+        "trust_tax_credit": allowed_trust_credit,
+        "trust_tax_after_credit": beneficiary_trust_tax_after_credit,
+        "personal_tax_adjustment": property_tax_adjustment + beneficiary_trust_tax_after_credit,
+    }
+
+
 # ============================================================
 # SECTION: SUPER ACCOUNT HELPERS
 # ============================================================
@@ -768,6 +904,31 @@ def validate_inputs(inputs):
     if inputs["non_super_ownership_person1"] < 0 or inputs["non_super_ownership_person1"] > 1:
         errors.append("Person 1 Non-Super Ownership must be between 0 and 1.")
 
+    if inputs.get("residential_property_enabled", False):
+        for field in [
+            "residential_property_value",
+            "residential_property_loan_balance",
+            "residential_property_gross_rent",
+            "residential_property_operating_expenses",
+            "residential_property_opening_quarantined_loss",
+        ]:
+            if float(inputs.get(field, 0.0)) < 0:
+                errors.append(f"{field} cannot be negative.")
+        if not 0 <= float(inputs.get("residential_property_ownership_person1", 0.5)) <= 1:
+            errors.append("Residential property ownership for Person 1 must be between 0 and 1.")
+        if float(inputs.get("residential_property_interest_rate", 0.0)) < 0:
+            errors.append("Residential property interest rate cannot be negative.")
+
+    if inputs.get("discretionary_trust_enabled", False):
+        if float(inputs.get("discretionary_trust_net_income", 0.0)) < 0:
+            errors.append("Discretionary trust net income cannot be negative.")
+        if float(inputs.get("discretionary_trust_excluded_income", 0.0)) < 0:
+            errors.append("Discretionary trust excluded income cannot be negative.")
+        if float(inputs.get("discretionary_trust_excluded_income", 0.0)) > float(inputs.get("discretionary_trust_net_income", 0.0)):
+            errors.append("Discretionary trust excluded income cannot exceed net income.")
+        if not 0 <= float(inputs.get("discretionary_trust_ownership_person1", 0.5)) <= 1:
+            errors.append("Discretionary trust allocation for Person 1 must be between 0 and 1.")
+
     if inputs.get("retirement_spending_trigger") not in ["Both Retired", "Either Retired"]:
         errors.append("retirement_spending_trigger must be either 'Both Retired' or 'Either Retired'.")
 
@@ -820,6 +981,24 @@ def generate_input_warnings(inputs):
 
     start_fy = parse_financial_year_label(inputs["start_financial_year"])
     projection_end_fy = start_fy + int(inputs["projection_years"]) - 1
+    if inputs.get("residential_property_enabled", False):
+        if (
+            projection_end_fy >= NEGATIVE_GEARING_RESTRICTION_START_FY
+            and not inputs.get("residential_property_acquired_before_budget_time", False)
+            and not inputs.get("residential_property_is_new_build", False)
+            and not inputs.get("residential_property_is_exempt_housing", False)
+        ):
+            warnings.append(
+                "Residential rental losses are quarantined from 2027-28 under the modelled legislated rule and carried forward against future residential income."
+            )
+        warnings.append(
+            "Residential property modelling is an aggregate, interest-only projection. Property equity is included in net wealth but is not sold or refinanced to fund spending; principal repayments, depreciation schedules, sale costs, and property CGT are not modelled."
+        )
+
+    if inputs.get("discretionary_trust_enabled", False):
+        warnings.append(
+            "The discretionary trust 30% minimum tax is based on the September 2026 exposure draft and is not enacted law. Final legislation may change the result."
+        )
     if projection_end_fy > LATEST_PUBLISHED_SUPER_THRESHOLD_FY:
         warnings.append(
             f"Published indexed super thresholds are currently configured through "
@@ -1428,6 +1607,8 @@ def run_one_year(
     contribution_event_lookup,
     person1_has_started_pension,
     person2_has_started_pension,
+    opening_residential_property_value=0.0,
+    opening_residential_quarantined_loss=0.0,
 ):
     year_index = year_context["year_index"]
     financial_year_end = year_context["financial_year_end"]
@@ -1580,6 +1761,69 @@ def run_one_year(
         phase=person2_super_phase_for_transfer,
     )
 
+    residential_property_enabled = bool(inputs.get("residential_property_enabled", False))
+    property_ownership_person1 = (
+        1.0 if is_one_person_mode(inputs)
+        else min(max(float(inputs.get("residential_property_ownership_person1", 0.5)), 0.0), 1.0)
+    )
+    property_ownership_person2 = 1.0 - property_ownership_person1
+    property_gross_rent = (
+        float(inputs.get("residential_property_gross_rent", 0.0))
+        * ((1 + float(inputs.get("residential_property_rent_growth_rate", inputs.get("inflation_rate", 0.0)))) ** year_index)
+        if residential_property_enabled else 0.0
+    )
+    property_operating_expenses = (
+        float(inputs.get("residential_property_operating_expenses", 0.0))
+        * ((1 + float(inputs.get("residential_property_expense_growth_rate", inputs.get("inflation_rate", 0.0)))) ** year_index)
+        if residential_property_enabled else 0.0
+    )
+    property_loan_balance = (
+        max(float(inputs.get("residential_property_loan_balance", 0.0)), 0.0)
+        if residential_property_enabled else 0.0
+    )
+    property_loan_interest = property_loan_balance * max(
+        float(inputs.get("residential_property_interest_rate", 0.0)), 0.0
+    )
+    residential_result = calculate_residential_property_year(
+        gross_rent=property_gross_rent,
+        deductible_operating_expenses=property_operating_expenses,
+        loan_interest=property_loan_interest,
+        opening_quarantined_loss=opening_residential_quarantined_loss,
+        financial_year_end=financial_year_end,
+        acquired_before_budget_time=inputs.get("residential_property_acquired_before_budget_time", False),
+        is_new_build=inputs.get("residential_property_is_new_build", False),
+        is_exempt_housing=inputs.get("residential_property_is_exempt_housing", False),
+    )
+    property_growth_rate = float(inputs.get("residential_property_capital_growth_rate", 0.0))
+    ending_residential_property_value = max(
+        float(opening_residential_property_value) * (1 + property_growth_rate),
+        0.0,
+    ) if residential_property_enabled else 0.0
+
+    discretionary_trust_enabled = bool(inputs.get("discretionary_trust_enabled", False))
+    trust_income_growth_rate = float(inputs.get("discretionary_trust_income_growth_rate", inputs.get("inflation_rate", 0.0)))
+    trust_net_income = (
+        float(inputs.get("discretionary_trust_net_income", 0.0))
+        * ((1 + trust_income_growth_rate) ** year_index)
+        if discretionary_trust_enabled else 0.0
+    )
+    trust_excluded_income = (
+        float(inputs.get("discretionary_trust_excluded_income", 0.0))
+        * ((1 + trust_income_growth_rate) ** year_index)
+        if discretionary_trust_enabled else 0.0
+    )
+    trust_result = calculate_discretionary_trust_minimum_tax(
+        trust_net_income=trust_net_income,
+        excluded_income=trust_excluded_income,
+        financial_year_end=financial_year_end,
+        subject_to_minimum_tax=inputs.get("discretionary_trust_subject_to_minimum_tax", True),
+    )
+    trust_ownership_person1 = (
+        1.0 if is_one_person_mode(inputs)
+        else min(max(float(inputs.get("discretionary_trust_ownership_person1", 0.5)), 0.0), 1.0)
+    )
+    trust_ownership_person2 = 1.0 - trust_ownership_person1
+
     taxable_non_super_guess = max(opening_non_super_balance * non_super_income_return_rate, 0.0)
 
     for _ in range(3):
@@ -1596,15 +1840,61 @@ def run_one_year(
             tax_schedule_key=tax_schedule_key,
         )
 
+        person1_budget_tax = calculate_incremental_budget_tax(
+            base_taxable_income=tax_split["person1_taxable_income"],
+            residential_taxable_income=residential_result["taxable_rental_income"] * property_ownership_person1,
+            trust_taxable_income=trust_result["trust_net_income"] * trust_ownership_person1,
+            trust_tax_credit=trust_result["trustee_minimum_tax"] * trust_ownership_person1,
+            tax_schedule_key=tax_schedule_key,
+        )
+        person2_budget_tax = calculate_incremental_budget_tax(
+            base_taxable_income=tax_split["person2_taxable_income"],
+            residential_taxable_income=residential_result["taxable_rental_income"] * property_ownership_person2,
+            trust_taxable_income=trust_result["trust_net_income"] * trust_ownership_person2,
+            trust_tax_credit=trust_result["trustee_minimum_tax"] * trust_ownership_person2,
+            tax_schedule_key=tax_schedule_key,
+        )
+        person1_division_293 = calculate_division_293_tax(
+            division_293_income=(
+                person1_budget_tax["adjusted_taxable_income"]
+                + max(-residential_result["taxable_rental_income"] * property_ownership_person1, 0.0)
+            ),
+            concessional_contributions=person1_gross_concessional_contribution,
+            financial_year_end=financial_year_end,
+        )
+        person2_division_293 = calculate_division_293_tax(
+            division_293_income=(
+                person2_budget_tax["adjusted_taxable_income"]
+                + max(-residential_result["taxable_rental_income"] * property_ownership_person2, 0.0)
+            ),
+            concessional_contributions=person2_gross_concessional_contribution,
+            financial_year_end=financial_year_end,
+        )
+
+        person1_property_and_trust_cash = (
+            residential_result["net_cashflow"] * property_ownership_person1
+            + trust_result["trust_net_income"] * trust_ownership_person1
+            - trust_result["trustee_minimum_tax"] * trust_ownership_person1
+            - person1_budget_tax["personal_tax_adjustment"]
+        )
+        person2_property_and_trust_cash = (
+            residential_result["net_cashflow"] * property_ownership_person2
+            + trust_result["trust_net_income"] * trust_ownership_person2
+            - trust_result["trustee_minimum_tax"] * trust_ownership_person2
+            - person2_budget_tax["personal_tax_adjustment"]
+        )
+
         person1_net_income = (
             person1_gross_income
             - tax_split["person1_salary_tax_total"]
-            - tax_split["person1_division_293_tax"]
+            - person1_division_293["division_293_tax"]
+            + person1_property_and_trust_cash
         )
         person2_net_income = (
             person2_gross_income
             - tax_split["person2_salary_tax_total"]
-            - tax_split["person2_division_293_tax"]
+            - person2_division_293["division_293_tax"]
+            + person2_property_and_trust_cash
         )
 
         cashflow = solve_cashflow_before_returns(
@@ -1778,10 +2068,18 @@ def run_one_year(
         + tax_split["person2_salary_tax_total"]
     )
     total_division_293_tax = (
-        tax_split["person1_division_293_tax"]
-        + tax_split["person2_division_293_tax"]
+        person1_division_293["division_293_tax"]
+        + person2_division_293["division_293_tax"]
     )
-    total_personal_tax = salary_tax_total + non_super_tax_paid + total_division_293_tax
+    total_budget_personal_tax_adjustment = (
+        person1_budget_tax["personal_tax_adjustment"]
+        + person2_budget_tax["personal_tax_adjustment"]
+    )
+    total_personal_tax = (
+        salary_tax_total + non_super_tax_paid + total_division_293_tax
+        + total_budget_personal_tax_adjustment
+        + trust_result["trustee_minimum_tax"]
+    )
     total_super_contributions_tax = (
         person1_super_contributions_tax + person2_super_contributions_tax
     )
@@ -1799,17 +2097,20 @@ def run_one_year(
         + total_super_earnings_tax
         + total_super_withdrawal_cgt_tax
     )
-    total_wealth = total_super_balance + ending_non_super_balance
+    residential_property_net_equity = ending_residential_property_value - property_loan_balance
+    total_wealth = total_super_balance + ending_non_super_balance + residential_property_net_equity
 
     person1_net_income = (
         person1_gross_income
         - tax_split["person1_salary_tax_total"]
-        - tax_split["person1_division_293_tax"]
+        - person1_division_293["division_293_tax"]
+        + person1_property_and_trust_cash
     )
     person2_net_income = (
         person2_gross_income
         - tax_split["person2_salary_tax_total"]
-        - tax_split["person2_division_293_tax"]
+        - person2_division_293["division_293_tax"]
+        + person2_property_and_trust_cash
     )
 
     policy_snapshot = get_policy_snapshot(financial_year_end)
@@ -1828,8 +2129,8 @@ def run_one_year(
         "person1_gross_income": person1_gross_income,
         "person2_gross_income": person2_gross_income,
         "household_gross_income": person1_gross_income + person2_gross_income,
-        "person1_total_taxable_income": tax_split["person1_taxable_income"],
-        "person2_total_taxable_income": tax_split["person2_taxable_income"],
+        "person1_total_taxable_income": person1_budget_tax["adjusted_taxable_income"],
+        "person2_total_taxable_income": person2_budget_tax["adjusted_taxable_income"],
         "person1_assessable_before_deduction": tax_split["person1_assessable_before_deduction"],
         "person2_assessable_before_deduction": tax_split["person2_assessable_before_deduction"],
         "person1_income_tax": tax_split["person1_income_tax"],
@@ -1838,11 +2139,11 @@ def run_one_year(
         "person1_income_tax_on_non_super_earnings": tax_split["person1_income_tax_on_non_super_earnings"],
         "person1_medicare_levy_on_non_super_earnings": tax_split["person1_medicare_levy_on_non_super_earnings"],
         "person1_non_super_tax_total": tax_split["person1_non_super_tax_total"],
-        "person1_division_293_income": tax_split["person1_division_293_income"],
-        "person1_division_293_super_contributions": tax_split["person1_division_293_super_contributions"],
-        "person1_division_293_taxable_contributions": tax_split["person1_division_293_taxable_contributions"],
-        "person1_division_293_tax": tax_split["person1_division_293_tax"],
-        "person1_personal_tax_total": tax_split["person1_salary_tax_total"] + (non_super_tax_paid * inputs["non_super_ownership_person1"]),
+        "person1_division_293_income": person1_division_293["division_293_income"],
+        "person1_division_293_super_contributions": person1_division_293["division_293_super_contributions"],
+        "person1_division_293_taxable_contributions": person1_division_293["division_293_taxable_contributions"],
+        "person1_division_293_tax": person1_division_293["division_293_tax"],
+        "person1_personal_tax_total": tax_split["person1_salary_tax_total"] + (non_super_tax_paid * inputs["non_super_ownership_person1"]) + person1_budget_tax["personal_tax_adjustment"],
         "person1_net_income": person1_net_income,
         "person2_income_tax": tax_split["person2_income_tax"],
         "person2_medicare_levy": tax_split["person2_medicare_levy"],
@@ -1850,16 +2151,48 @@ def run_one_year(
         "person2_income_tax_on_non_super_earnings": tax_split["person2_income_tax_on_non_super_earnings"],
         "person2_medicare_levy_on_non_super_earnings": tax_split["person2_medicare_levy_on_non_super_earnings"],
         "person2_non_super_tax_total": tax_split["person2_non_super_tax_total"],
-        "person2_division_293_income": tax_split["person2_division_293_income"],
-        "person2_division_293_super_contributions": tax_split["person2_division_293_super_contributions"],
-        "person2_division_293_taxable_contributions": tax_split["person2_division_293_taxable_contributions"],
-        "person2_division_293_tax": tax_split["person2_division_293_tax"],
-        "person2_personal_tax_total": tax_split["person2_salary_tax_total"] + (non_super_tax_paid * (1.0 - inputs["non_super_ownership_person1"])),
+        "person2_division_293_income": person2_division_293["division_293_income"],
+        "person2_division_293_super_contributions": person2_division_293["division_293_super_contributions"],
+        "person2_division_293_taxable_contributions": person2_division_293["division_293_taxable_contributions"],
+        "person2_division_293_tax": person2_division_293["division_293_tax"],
+        "person2_personal_tax_total": tax_split["person2_salary_tax_total"] + (non_super_tax_paid * (1.0 - inputs["non_super_ownership_person1"])) + person2_budget_tax["personal_tax_adjustment"],
         "person2_net_income": person2_net_income,
         "household_net_income": person1_net_income + person2_net_income,
         "taxable_non_super_earnings_total": taxable_non_super_guess,
         "taxable_non_super_earnings_p1": tax_split["person1_taxable_non_super"],
         "taxable_non_super_earnings_p2": tax_split["person2_taxable_non_super"],
+        "residential_property_enabled": residential_property_enabled,
+        "residential_property_restriction_applies": residential_result["restriction_applies"],
+        "residential_property_gross_rent": residential_result["gross_rent"],
+        "residential_property_operating_expenses": residential_result["deductible_operating_expenses"],
+        "residential_property_loan_interest": residential_result["loan_interest"],
+        "residential_property_total_deductions": residential_result["total_deductions"],
+        "residential_property_net_cashflow": residential_result["net_cashflow"],
+        "residential_property_taxable_income": residential_result["taxable_rental_income"],
+        "residential_property_current_year_quarantined_loss": residential_result["current_year_quarantined_loss"],
+        "residential_property_quarantined_loss_used": residential_result["quarantined_loss_used"],
+        "opening_residential_property_quarantined_loss": residential_result["opening_quarantined_loss"],
+        "closing_residential_property_quarantined_loss": residential_result["closing_quarantined_loss"],
+        "opening_residential_property_value": opening_residential_property_value,
+        "ending_residential_property_value": ending_residential_property_value,
+        "residential_property_loan_balance": property_loan_balance,
+        "residential_property_net_equity": residential_property_net_equity,
+        "discretionary_trust_enabled": discretionary_trust_enabled,
+        "discretionary_trust_net_income": trust_result["trust_net_income"],
+        "discretionary_trust_excluded_income": trust_result["excluded_income"],
+        "discretionary_trust_minimum_tax_income": trust_result["minimum_tax_income"],
+        "discretionary_trust_minimum_tax_applies": trust_result["minimum_tax_applies"],
+        "discretionary_trust_trustee_minimum_tax": trust_result["trustee_minimum_tax"],
+        "discretionary_trust_policy_status": trust_result["policy_status"],
+        "person1_property_tax_adjustment": person1_budget_tax["property_tax_adjustment"],
+        "person2_property_tax_adjustment": person2_budget_tax["property_tax_adjustment"],
+        "person1_trust_tax_before_credit": person1_budget_tax["trust_tax_before_credit"],
+        "person2_trust_tax_before_credit": person2_budget_tax["trust_tax_before_credit"],
+        "person1_trust_tax_credit": person1_budget_tax["trust_tax_credit"],
+        "person2_trust_tax_credit": person2_budget_tax["trust_tax_credit"],
+        "person1_trust_tax_after_credit": person1_budget_tax["trust_tax_after_credit"],
+        "person2_trust_tax_after_credit": person2_budget_tax["trust_tax_after_credit"],
+        "total_budget_personal_tax_adjustment": total_budget_personal_tax_adjustment,
         "spending": current_spending,
         "person1_sg_contribution": person1_sg_contribution,
         "person2_sg_contribution": person2_sg_contribution,
@@ -1983,6 +2316,7 @@ def run_one_year(
         "non_super_tax_paid": non_super_tax_paid,
         "total_super_contributions_tax": total_super_contributions_tax,
         "total_division_293_tax": total_division_293_tax,
+        "total_discretionary_trust_minimum_tax": trust_result["trustee_minimum_tax"],
         "total_super_earnings_tax": total_super_earnings_tax,
         "total_tax_paid": total_tax_paid,
         "policy_version": policy_snapshot["policy_version"],
@@ -2018,6 +2352,13 @@ def run_deterministic_projection(inputs):
 
     current_non_super_balance = inputs["non_super_balance"]
     current_non_super_cost_base = inputs["non_super_cost_base"]
+    current_residential_property_value = (
+        float(inputs.get("residential_property_value", 0.0))
+        if inputs.get("residential_property_enabled", False) else 0.0
+    )
+    current_residential_quarantined_loss = max(
+        float(inputs.get("residential_property_opening_quarantined_loss", 0.0)), 0.0
+    )
 
     person1_has_started_pension = inputs["person1_pension_super_balance"] > 0
     person2_has_started_pension = inputs["person2_pension_super_balance"] > 0
@@ -2052,6 +2393,8 @@ def run_deterministic_projection(inputs):
             contribution_event_lookup=contribution_event_lookup,
             person1_has_started_pension=person1_has_started_pension,
             person2_has_started_pension=person2_has_started_pension,
+            opening_residential_property_value=current_residential_property_value,
+            opening_residential_quarantined_loss=current_residential_quarantined_loss,
         )
 
         results.append(result)
@@ -2068,6 +2411,8 @@ def run_deterministic_projection(inputs):
 
         current_non_super_balance = result["ending_non_super_balance"]
         current_non_super_cost_base = result["ending_non_super_cost_base"]
+        current_residential_property_value = result["ending_residential_property_value"]
+        current_residential_quarantined_loss = result["closing_residential_property_quarantined_loss"]
 
         person1_has_started_pension = result["person1_has_started_pension"]
         person2_has_started_pension = result["person2_has_started_pension"]
@@ -2103,6 +2448,13 @@ def run_single_simulation(inputs, rng, contribution_event_lookup, projection_con
 
     current_non_super_balance = inputs["non_super_balance"]
     current_non_super_cost_base = inputs["non_super_cost_base"]
+    current_residential_property_value = (
+        float(inputs.get("residential_property_value", 0.0))
+        if inputs.get("residential_property_enabled", False) else 0.0
+    )
+    current_residential_quarantined_loss = max(
+        float(inputs.get("residential_property_opening_quarantined_loss", 0.0)), 0.0
+    )
 
     person1_has_started_pension = inputs["person1_pension_super_balance"] > 0
     person2_has_started_pension = inputs["person2_pension_super_balance"] > 0
@@ -2151,6 +2503,8 @@ def run_single_simulation(inputs, rng, contribution_event_lookup, projection_con
             contribution_event_lookup=contribution_event_lookup,
             person1_has_started_pension=person1_has_started_pension,
             person2_has_started_pension=person2_has_started_pension,
+            opening_residential_property_value=current_residential_property_value,
+            opening_residential_quarantined_loss=current_residential_quarantined_loss,
         )
 
         minimal_path_rows.append(make_minimal_path_row(result, simulation_id))
@@ -2170,6 +2524,8 @@ def run_single_simulation(inputs, rng, contribution_event_lookup, projection_con
 
         current_non_super_balance = result["ending_non_super_balance"]
         current_non_super_cost_base = result["ending_non_super_cost_base"]
+        current_residential_property_value = result["ending_residential_property_value"]
+        current_residential_quarantined_loss = result["closing_residential_property_quarantined_loss"]
 
         person1_has_started_pension = result["person1_has_started_pension"]
         person2_has_started_pension = result["person2_has_started_pension"]

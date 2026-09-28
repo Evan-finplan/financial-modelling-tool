@@ -10,7 +10,7 @@ calculation engine.
 """
 
 
-POLICY_VERSION = "2026-27 Budget phase 1"
+POLICY_VERSION = "2026-27 Budget phase 2 - residential property and trust minimum tax"
 POLICY_LAST_REVIEWED = "2026-09-28"
 LATEST_PUBLISHED_SUPER_THRESHOLD_FY = 2027
 
@@ -47,6 +47,17 @@ SUPER_GUARANTEE_RATE = 0.12
 DIVISION_293_THRESHOLD = 250_000.0
 DIVISION_293_TAX_RATE = 0.15
 
+# Residential negative-gearing changes are legislated. The restriction applies
+# from the 2027-28 income year to established residential property acquired
+# after 7:30pm AEST on 12 May 2026, subject to statutory exceptions.
+NEGATIVE_GEARING_RESTRICTION_START_FY = 2028
+
+# The discretionary-trust measure is still exposure draft policy at the date
+# above. It is modelled as a scenario assumption, not represented as enacted law.
+DISCRETIONARY_TRUST_MINIMUM_TAX_START_FY = 2029
+DISCRETIONARY_TRUST_MINIMUM_TAX_RATE = 0.30
+DISCRETIONARY_TRUST_MINIMUM_TAX_STATUS = "Exposure draft - not enacted"
+
 
 CONCESSIONAL_CONTRIBUTIONS_CAPS = {
     2026: 30_000.0,
@@ -75,6 +86,9 @@ POLICY_SOURCES = {
     "personal_tax_rates": "https://budget.gov.au/content/02-cost-of-living.htm",
     "super_rates_and_thresholds": "https://www.ato.gov.au/tax-rates-and-codes/key-superannuation-rates-and-thresholds",
     "division_293": "https://www.ato.gov.au/individuals-and-families/super-for-individuals-and-families/super/growing-and-keeping-track-of-your-super/caps-limits-and-tax-on-super-contributions/division-293-tax-on-concessional-contributions-by-high-income-earners",
+    "negative_gearing": "https://www.legislation.gov.au/C2026A00049/asmade",
+    "negative_gearing_amendments": "https://www.legislation.gov.au/C2026A00071/asmade",
+    "discretionary_trust_exposure_draft": "https://consult.treasury.gov.au/c2026-799771",
 }
 
 
@@ -126,5 +140,9 @@ def get_policy_snapshot(financial_year_end):
         "super_guarantee_maximum_earnings_base": get_super_guarantee_maximum_earnings_base(financial_year_end),
         "division_293_threshold": DIVISION_293_THRESHOLD,
         "division_293_tax_rate": DIVISION_293_TAX_RATE,
+        "negative_gearing_restriction_start_fy": NEGATIVE_GEARING_RESTRICTION_START_FY,
+        "discretionary_trust_minimum_tax_start_fy": DISCRETIONARY_TRUST_MINIMUM_TAX_START_FY,
+        "discretionary_trust_minimum_tax_rate": DISCRETIONARY_TRUST_MINIMUM_TAX_RATE,
+        "discretionary_trust_minimum_tax_status": DISCRETIONARY_TRUST_MINIMUM_TAX_STATUS,
         "policy_version": POLICY_VERSION,
     }

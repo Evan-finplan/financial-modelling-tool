@@ -34,6 +34,8 @@ A Streamlit-based financial modelling tool for analysing retirement outcomes und
 - Capital gains tax (average cost method)
 - Division 293 tax estimate for high-income clients
 - 2026-27 SG maximum earnings base and indexed super caps
+- Residential investment property cashflow and legislated negative-gearing loss quarantine
+- Discretionary trust 30% minimum-tax policy scenario (exposure draft; not enacted)
 - Retirement income sustainability
 
 ---

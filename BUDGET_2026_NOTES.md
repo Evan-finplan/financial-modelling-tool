@@ -39,3 +39,42 @@ Phase 1 instead focuses on measures and controls that are material to higher-inc
 The Division 293 result is an estimate. The current model does not capture every component of the statutory Division 293 income definition, including reportable fringe benefits, net rental property losses, defined benefit contributions, and other adjustments used in an ATO assessment. Phase 1 assumes the estimated Division 293 liability is paid from household cash rather than released from super.
 
 Published indexed super thresholds are configured through 2027FY. Later projection years retain the latest known contribution caps, general transfer balance cap, and SG maximum earnings base until the policy configuration is refreshed with newly published values.
+
+## Phase 2 implementation: residential property and discretionary trusts
+
+Phase 2 is intentionally limited to the two items requested for this release.
+
+### Residential investment and negative gearing
+
+The model now includes one aggregate residential investment property with opening market value, an interest-only loan, gross rent, deductible operating expenses, ownership, and growth assumptions. It applies the legislated loss-quarantine rule from the 2027–28 income year where the property is an affected established dwelling acquired after 7:30pm AEST on 12 May 2026. A current-year restricted loss is carried forward and may offset future modelled residential property income.
+
+The interface includes scenario flags for a property acquired before Budget time, a qualifying new build, and qualifying exempt housing. These flags require adviser confirmation against the legislation and current guidance. The August 2026 amendments preserving treatment in specified death and relationship-breakdown transfers are recognised in the policy notes, but the model does not independently identify those legal events; the adviser must select the resulting applicable status.
+
+This is an aggregate, interest-only projection. Property equity is included in net wealth but is not treated as liquid funding for household spending. The model does not sell or refinance the property and does not model principal repayments, depreciation schedules, borrowing-cost amortisation, individual property disposal, transaction costs, or residential CGT.
+
+### Discretionary trust 30% minimum tax
+
+The model includes a policy-scenario estimate from the 2028–29 income year. It calculates 30% trustee minimum tax on entered in-scope trust net income, allocates non-refundable credits to the modelled individual beneficiaries, and caps each credit at tax attributable to that beneficiary's trust income. Entered excluded income is removed from the minimum-tax base.
+
+As at 28 September 2026, this measure is based on the Treasury Laws Amendment (Tax Reform No. 4) Bill 2026 exposure draft released on 3 September 2026. It is not enacted law. The calculation is therefore labelled **Exposure draft - not enacted** in annual output and may need to change when a Bill is introduced, amended, passed, or supported by final ATO guidance.
+
+The model does not independently test trust legal form or eligibility for every exclusion. It does not model corporate beneficiaries, non-resident withholding, UPE/Division 7A interactions, franking-credit pools, charity caps, the proposed fixed-distribution election, restructuring rollover relief, integrity rules, or trustee administrative and collection rules.
+
+## Explicitly not implemented in this release
+
+The following matters remain outside the calculation engine and should not be inferred from any output:
+
+- full asset-level CGT records, pre/post 1 July 2027 gain segmentation, CPI cost-base indexation, the 30% minimum tax on real capital gains, capital-loss ledgers, and partial disposal ordering;
+- property CGT, depreciation schedules, loan principal amortisation, refinancing, purchase and sale costs, multiple properties, and entity-by-entity residential loss pools;
+- complete Division 293 statutory income inputs, including reportable fringe benefits, net investment loss adjustments, defined benefit contributions, and ATO assessment reconciliation;
+- concessional contribution carry-forward eligibility and non-concessional bring-forward rules;
+- personal transfer balance account history and proportional indexation of an individual's transfer balance cap;
+- the $1,000 standard deduction, Working Australians Tax Offset, and their requested separate pre/post-tax reporting, as documented above; and
+- final-law discretionary trust rules and administrative mechanisms that remain subject to the legislative process.
+
+## Phase 2 policy sources
+
+- Treasury Laws Amendment (Tax Reform No. 1) Act 2026, Schedule 2: https://www.legislation.gov.au/C2026A00049/asmade
+- Treasury Laws Amendment (Tax Reform No. 2) Act 2026, Schedule 4: https://www.legislation.gov.au/C2026A00071/asmade
+- Treasury Budget tax changes overview: https://treasury.gov.au/policy-topics/taxation/budget2026-27
+- Minimum tax on discretionary trusts exposure draft: https://consult.treasury.gov.au/c2026-799771
