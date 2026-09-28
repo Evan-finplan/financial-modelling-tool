@@ -4,6 +4,10 @@ import numpy as np
 import pandas as pd
 
 from policy import (
+    CGT_CORE_POLICY_STATUS,
+    CGT_MINIMUM_TAX_RATE,
+    CGT_REFORM_START_FY,
+    CGT_TRANSITION_METHOD_STATUS,
     DISCRETIONARY_TRUST_MINIMUM_TAX_RATE,
     DISCRETIONARY_TRUST_MINIMUM_TAX_START_FY,
     DISCRETIONARY_TRUST_MINIMUM_TAX_STATUS,
@@ -935,6 +939,21 @@ def validate_inputs(inputs):
     if inputs.get("cgt_discount_rate", 0.50) < 0 or inputs.get("cgt_discount_rate", 0.50) > 1:
         errors.append("cgt_discount_rate must be between 0 and 1.")
 
+    if float(inputs.get("non_super_transition_value_2027", inputs["non_super_balance"])) < 0:
+        errors.append("non_super_transition_value_2027 cannot be negative.")
+    if float(inputs.get("non_super_opening_capital_losses", 0.0)) < 0:
+        errors.append("non_super_opening_capital_losses cannot be negative.")
+    if float(inputs.get("cgt_indexation_rate", inputs.get("inflation_rate", 0.0))) <= -1:
+        errors.append("cgt_indexation_rate must be greater than -1.00.")
+    if inputs.get("cgt_asset_category", "Other") not in {
+        "Other", "New residential dwelling", "Affordable housing"
+    }:
+        errors.append("cgt_asset_category is not recognised.")
+    if inputs.get("cgt_new_residential_method", "Indexation and 30% minimum tax") not in {
+        "Indexation and 30% minimum tax", "50% discount"
+    }:
+        errors.append("cgt_new_residential_method is not recognised.")
+
     if inputs["non_super_cost_base"] > inputs["non_super_balance"] + 1e-9:
         errors.append("non_super_cost_base cannot exceed non_super_balance under the current average-cost setup.")
 
@@ -999,6 +1018,16 @@ def generate_input_warnings(inputs):
         warnings.append(
             "The discretionary trust 30% minimum tax is based on the September 2026 exposure draft and is not enacted law. Final legislation may change the result."
         )
+    if inputs.get("cgt_reform_enabled", True) and projection_end_fy >= CGT_REFORM_START_FY:
+        warnings.append(
+            "The enacted CGT reform is modelled using one homogeneous non-super pool. The 1 July 2027 transition allocation, annual CPI indexation, loss ordering, and partial disposals are planning estimates and must be reconciled to asset-level records for tax return work."
+        )
+        if inputs.get("cgt_asset_category", "Other") in {
+            "New residential dwelling", "Affordable housing"
+        }:
+            warnings.append(
+                "The selected new/affordable housing CGT method is a scenario choice. Confirm statutory eligibility and compare the 50% discount with indexation using actual records at disposal."
+            )
     if projection_end_fy > LATEST_PUBLISHED_SUPER_THRESHOLD_FY:
         warnings.append(
             f"Published indexed super thresholds are currently configured through "
@@ -1028,7 +1057,7 @@ def generate_input_warnings(inputs):
     if inputs["number_of_simulations"] < 1000:
         warnings.append("Number of Simulations is relatively low. Results may be less stable.")
 
-    warnings.append("This version uses an average-cost CGT approximation for non-super withdrawals used to fund cash shortfall.")
+    warnings.append("Non-super withdrawals use a pooled average-cost method; individual tax parcels and exact disposal ordering are not modelled.")
     warnings.append("Salary income is indexed annually using the inflation rate while the person remains in working phase.")
     warnings.append("Pension transfer is triggered from pension start age and is applied up to the person's transfer balance cap. Minimum pension drawdown is then applied from pension assets.")
     warnings.append("Personal deductible contributions reduce taxable income and also flow through concessional contribution tax inside super.")
@@ -1319,6 +1348,190 @@ def calculate_average_cost_cgt_on_sale(
     }
 
 
+def calculate_budget_cgt_on_sale(
+    sale_proceeds,
+    pool_market_value,
+    pool_cost_base,
+    pool_indexed_cost_base,
+    pool_deferred_pre_2027_gain,
+    opening_capital_losses,
+    financial_year_end,
+    cgt_discount_rate=0.50,
+    indexation_rate=0.0,
+    asset_category="Other",
+    new_residential_method="Indexation and 30% minimum tax",
+    held_at_least_12_months=True,
+    reform_enabled=True,
+):
+    """Estimate Budget 2026 CGT for a homogeneous non-super asset pool.
+
+    For post-reform disposals, losses are applied first to the real gain that
+    can be subject to the minimum tax, then to the deferred pre-1 July 2027
+    component. This ordering is a documented modelling assumption.
+    """
+    sale_proceeds = max(float(sale_proceeds), 0.0)
+    pool_market_value = max(float(pool_market_value), 0.0)
+    pool_cost_base = max(float(pool_cost_base), 0.0)
+    pool_indexed_cost_base = max(float(pool_indexed_cost_base), 0.0)
+    pool_deferred_pre_2027_gain = float(pool_deferred_pre_2027_gain)
+    opening_capital_losses = max(float(opening_capital_losses), 0.0)
+    cgt_discount_rate = min(max(float(cgt_discount_rate), 0.0), 1.0)
+    indexation_rate = max(float(indexation_rate), -0.99)
+    financial_year_end = int(financial_year_end)
+
+    reform_applies = bool(reform_enabled) and financial_year_end >= CGT_REFORM_START_FY
+    indexed_cost_base_at_sale = (
+        pool_indexed_cost_base * (1 + indexation_rate)
+        if reform_applies else pool_indexed_cost_base
+    )
+
+    empty_result = {
+        "sale_proceeds": min(sale_proceeds, pool_market_value) if pool_market_value > 0 else 0.0,
+        "cost_base_reduction": 0.0,
+        "indexed_cost_base_reduction": 0.0,
+        "realised_capital_gain": 0.0,
+        "realised_capital_loss": 0.0,
+        "deferred_pre_2027_gain": 0.0,
+        "post_2027_real_gain": 0.0,
+        "net_capital_gain_before_discount": 0.0,
+        "discounted_taxable_capital_gain": 0.0,
+        "minimum_tax_capital_gain": 0.0,
+        "capital_losses_applied": 0.0,
+        "remaining_capital_losses": opening_capital_losses,
+        "remaining_cost_base": pool_cost_base,
+        "remaining_indexed_cost_base": indexed_cost_base_at_sale,
+        "remaining_deferred_pre_2027_gain": pool_deferred_pre_2027_gain,
+        "indexation_uplift": max(indexed_cost_base_at_sale - pool_indexed_cost_base, 0.0),
+        "reform_applies": reform_applies,
+        "calculation_method": "No disposal",
+    }
+    if sale_proceeds <= 0 or pool_market_value <= 0:
+        return empty_result
+
+    sale_proceeds = min(sale_proceeds, pool_market_value)
+    disposal_fraction = min(sale_proceeds / pool_market_value, 1.0)
+    nominal_cost_reduction = min(pool_cost_base, pool_cost_base * disposal_fraction)
+    indexed_cost_reduction = min(
+        indexed_cost_base_at_sale,
+        indexed_cost_base_at_sale * disposal_fraction,
+    )
+    deferred_component = pool_deferred_pre_2027_gain * disposal_fraction
+    remaining_cost_base = max(pool_cost_base - nominal_cost_reduction, 0.0)
+    remaining_indexed_cost_base = max(indexed_cost_base_at_sale - indexed_cost_reduction, 0.0)
+    remaining_deferred_gain = pool_deferred_pre_2027_gain - deferred_component
+
+    category_uses_discount = (
+        asset_category in {"New residential dwelling", "Affordable housing"}
+        and new_residential_method == "50% discount"
+    )
+    discount_factor = (1.0 - cgt_discount_rate) if held_at_least_12_months else 1.0
+
+    if not reform_applies or category_uses_discount:
+        gain_or_loss = sale_proceeds - nominal_cost_reduction
+        gross_gain = max(gain_or_loss, 0.0)
+        current_loss = max(-gain_or_loss, 0.0)
+        available_losses = opening_capital_losses + current_loss
+        losses_applied = min(gross_gain, available_losses)
+        net_gain = gross_gain - losses_applied
+        remaining_losses = available_losses - losses_applied
+        taxable_gain = net_gain * discount_factor
+        return {
+            **empty_result,
+            "sale_proceeds": sale_proceeds,
+            "cost_base_reduction": nominal_cost_reduction,
+            "indexed_cost_base_reduction": indexed_cost_reduction,
+            "realised_capital_gain": gross_gain,
+            "realised_capital_loss": current_loss,
+            "deferred_pre_2027_gain": net_gain if not reform_applies else 0.0,
+            "net_capital_gain_before_discount": net_gain,
+            "discounted_taxable_capital_gain": taxable_gain,
+            "capital_losses_applied": losses_applied,
+            "remaining_capital_losses": remaining_losses,
+            "remaining_cost_base": remaining_cost_base,
+            "remaining_indexed_cost_base": remaining_indexed_cost_base,
+            "remaining_deferred_pre_2027_gain": remaining_deferred_gain,
+            "calculation_method": (
+                "New/affordable residential 50% discount"
+                if category_uses_discount else "Pre-reform 50% discount"
+            ),
+        }
+
+    post_component = sale_proceeds - indexed_cost_reduction
+    pre_gain = max(deferred_component, 0.0)
+    post_gain = max(post_component, 0.0)
+    current_loss = max(-deferred_component, 0.0) + max(-post_component, 0.0)
+    available_losses = opening_capital_losses + current_loss
+
+    loss_to_post = min(post_gain, available_losses)
+    post_gain_after_losses = post_gain - loss_to_post
+    available_losses -= loss_to_post
+    loss_to_pre = min(pre_gain, available_losses)
+    pre_gain_after_losses = pre_gain - loss_to_pre
+    available_losses -= loss_to_pre
+    losses_applied = loss_to_post + loss_to_pre
+
+    taxable_pre_gain = pre_gain_after_losses * discount_factor
+    taxable_post_gain = post_gain_after_losses
+    taxable_gain = taxable_pre_gain + taxable_post_gain
+
+    return {
+        **empty_result,
+        "sale_proceeds": sale_proceeds,
+        "cost_base_reduction": nominal_cost_reduction,
+        "indexed_cost_base_reduction": indexed_cost_reduction,
+        "realised_capital_gain": pre_gain + post_gain,
+        "realised_capital_loss": current_loss,
+        "deferred_pre_2027_gain": pre_gain_after_losses,
+        "post_2027_real_gain": post_gain_after_losses,
+        "net_capital_gain_before_discount": pre_gain_after_losses + post_gain_after_losses,
+        "discounted_taxable_capital_gain": taxable_gain,
+        "minimum_tax_capital_gain": post_gain_after_losses,
+        "capital_losses_applied": losses_applied,
+        "remaining_capital_losses": available_losses,
+        "remaining_cost_base": remaining_cost_base,
+        "remaining_indexed_cost_base": remaining_indexed_cost_base,
+        "remaining_deferred_pre_2027_gain": remaining_deferred_gain,
+        "calculation_method": "Transition split + indexed real gain",
+    }
+
+
+def calculate_cgt_minimum_tax_gap(
+    taxable_income,
+    minimum_tax_capital_gain,
+    tax_schedule_key,
+    exempt_from_minimum_tax=False,
+):
+    """Calculate the Division 119 top-up using basic income tax only."""
+    taxable_income = max(float(taxable_income), 0.0)
+    minimum_tax_capital_gain = min(
+        max(float(minimum_tax_capital_gain), 0.0),
+        taxable_income,
+    )
+    if exempt_from_minimum_tax or minimum_tax_capital_gain <= 0:
+        return {
+            "minimum_tax_capital_gain": minimum_tax_capital_gain,
+            "basic_tax_attributable_to_gain": 0.0,
+            "cgt_minimum_tax_target": 0.0,
+            "cgt_minimum_tax_gap": 0.0,
+        }
+
+    current_basic_tax = calculate_progressive_income_tax(taxable_income, tax_schedule_key)
+    reduced_basic_tax = calculate_progressive_income_tax(
+        taxable_income - minimum_tax_capital_gain,
+        tax_schedule_key,
+    )
+    basic_tax_attributable = max(current_basic_tax - reduced_basic_tax, 0.0)
+    target = minimum_tax_capital_gain * CGT_MINIMUM_TAX_RATE
+    gap = max(target - basic_tax_attributable, 0.0)
+    gap = float(np.floor(gap))
+    return {
+        "minimum_tax_capital_gain": minimum_tax_capital_gain,
+        "basic_tax_attributable_to_gain": basic_tax_attributable,
+        "cgt_minimum_tax_target": target,
+        "cgt_minimum_tax_gap": gap,
+    }
+
+
 # ============================================================
 # SECTION: CASHFLOW SOLVER
 # ============================================================
@@ -1348,9 +1561,19 @@ def solve_cashflow_before_returns(
     person1_total_net_super_contribution,
     person2_total_net_super_contribution,
     cgt_discount_rate,
+    financial_year_end,
+    opening_non_super_indexed_cost_base,
+    opening_non_super_deferred_pre_2027_gain,
+    opening_non_super_capital_losses,
+    cgt_indexation_rate,
+    cgt_asset_category,
+    cgt_new_residential_method,
+    cgt_held_at_least_12_months,
+    cgt_reform_enabled,
 ):
     opening_non_super_balance = max(float(opening_non_super_balance), 0.0)
     opening_non_super_cost_base = max(float(opening_non_super_cost_base), 0.0)
+    opening_non_super_indexed_cost_base = max(float(opening_non_super_indexed_cost_base), 0.0)
 
     # ---------- Minimum pension drawdown CGT ----------
     person1_min_pension_cgt = calculate_super_withdrawal_cgt(
@@ -1427,16 +1650,28 @@ def solve_cashflow_before_returns(
         unmet_shortfall = extra_super_result["unfunded_after_super"]
 
     # ---------- Non-super withdrawal CGT ----------
-    non_super_sale_result = calculate_average_cost_cgt_on_sale(
+    non_super_sale_result = calculate_budget_cgt_on_sale(
         sale_proceeds=non_super_withdrawal,
         pool_market_value=opening_non_super_balance,
         pool_cost_base=opening_non_super_cost_base,
+        pool_indexed_cost_base=opening_non_super_indexed_cost_base,
+        pool_deferred_pre_2027_gain=opening_non_super_deferred_pre_2027_gain,
+        opening_capital_losses=opening_non_super_capital_losses,
+        financial_year_end=financial_year_end,
         cgt_discount_rate=cgt_discount_rate,
+        indexation_rate=cgt_indexation_rate,
+        asset_category=cgt_asset_category,
+        new_residential_method=cgt_new_residential_method,
+        held_at_least_12_months=cgt_held_at_least_12_months,
+        reform_enabled=cgt_reform_enabled,
     )
 
     non_super_cost_base_after_withdrawal = non_super_sale_result["remaining_cost_base"]
     non_super_cost_base_before_return = (
         non_super_cost_base_after_withdrawal + surplus_cash_to_non_super
+    )
+    non_super_indexed_cost_base_before_return = (
+        non_super_sale_result["remaining_indexed_cost_base"] + surplus_cash_to_non_super
     )
 
     # ---------- Extra super withdrawal CGT ----------
@@ -1549,9 +1784,20 @@ def solve_cashflow_before_returns(
         "non_super_withdrawal": non_super_withdrawal,
         "non_super_cost_base_after_withdrawal": non_super_cost_base_after_withdrawal,
         "non_super_cost_base_before_return": non_super_cost_base_before_return,
+        "non_super_indexed_cost_base_before_return": non_super_indexed_cost_base_before_return,
+        "non_super_deferred_pre_2027_gain_after_withdrawal": non_super_sale_result["remaining_deferred_pre_2027_gain"],
+        "non_super_capital_losses_after_withdrawal": non_super_sale_result["remaining_capital_losses"],
         "non_super_sale_cost_base_reduction": non_super_sale_result["cost_base_reduction"],
+        "non_super_sale_indexed_cost_base_reduction": non_super_sale_result["indexed_cost_base_reduction"],
         "non_super_realised_capital_gain": non_super_sale_result["realised_capital_gain"],
         "non_super_realised_capital_loss": non_super_sale_result["realised_capital_loss"],
+        "non_super_deferred_pre_2027_gain": non_super_sale_result["deferred_pre_2027_gain"],
+        "non_super_post_2027_real_gain": non_super_sale_result["post_2027_real_gain"],
+        "non_super_minimum_tax_capital_gain": non_super_sale_result["minimum_tax_capital_gain"],
+        "non_super_capital_losses_applied": non_super_sale_result["capital_losses_applied"],
+        "non_super_indexation_uplift": non_super_sale_result["indexation_uplift"],
+        "non_super_cgt_reform_applies": non_super_sale_result["reform_applies"],
+        "non_super_cgt_calculation_method": non_super_sale_result["calculation_method"],
         "non_super_discounted_taxable_capital_gain": non_super_sale_result["discounted_taxable_capital_gain"],
         "person1_extra_accum_withdrawal": person1_extra_accum_withdrawal,
         "person2_extra_accum_withdrawal": person2_extra_accum_withdrawal,
@@ -1609,6 +1855,9 @@ def run_one_year(
     person2_has_started_pension,
     opening_residential_property_value=0.0,
     opening_residential_quarantined_loss=0.0,
+    opening_non_super_indexed_cost_base=0.0,
+    opening_non_super_deferred_pre_2027_gain=0.0,
+    opening_non_super_capital_losses=0.0,
 ):
     year_index = year_context["year_index"]
     financial_year_end = year_context["financial_year_end"]
@@ -1825,6 +2074,8 @@ def run_one_year(
     trust_ownership_person2 = 1.0 - trust_ownership_person1
 
     taxable_non_super_guess = max(opening_non_super_balance * non_super_income_return_rate, 0.0)
+    minimum_tax_capital_gain_guess = 0.0
+    cgt_minimum_tax_exempt = bool(inputs.get("cgt_minimum_tax_exempt", False))
 
     for _ in range(3):
         tax_split = calculate_household_personal_tax_split(
@@ -1870,6 +2121,18 @@ def run_one_year(
             concessional_contributions=person2_gross_concessional_contribution,
             financial_year_end=financial_year_end,
         )
+        person1_cgt_minimum_tax = calculate_cgt_minimum_tax_gap(
+            taxable_income=person1_budget_tax["adjusted_taxable_income"],
+            minimum_tax_capital_gain=minimum_tax_capital_gain_guess * inputs["non_super_ownership_person1"],
+            tax_schedule_key=tax_schedule_key,
+            exempt_from_minimum_tax=cgt_minimum_tax_exempt,
+        )
+        person2_cgt_minimum_tax = calculate_cgt_minimum_tax_gap(
+            taxable_income=person2_budget_tax["adjusted_taxable_income"],
+            minimum_tax_capital_gain=minimum_tax_capital_gain_guess * (1.0 - inputs["non_super_ownership_person1"]),
+            tax_schedule_key=tax_schedule_key,
+            exempt_from_minimum_tax=cgt_minimum_tax_exempt,
+        )
 
         person1_property_and_trust_cash = (
             residential_result["net_cashflow"] * property_ownership_person1
@@ -1888,12 +2151,14 @@ def run_one_year(
             person1_gross_income
             - tax_split["person1_salary_tax_total"]
             - person1_division_293["division_293_tax"]
+            - person1_cgt_minimum_tax["cgt_minimum_tax_gap"]
             + person1_property_and_trust_cash
         )
         person2_net_income = (
             person2_gross_income
             - tax_split["person2_salary_tax_total"]
             - person2_division_293["division_293_tax"]
+            - person2_cgt_minimum_tax["cgt_minimum_tax_gap"]
             + person2_property_and_trust_cash
         )
 
@@ -1926,12 +2191,24 @@ def run_one_year(
             person1_total_net_super_contribution=person1_total_net_super_contribution,
             person2_total_net_super_contribution=person2_total_net_super_contribution,
             cgt_discount_rate=inputs.get("cgt_discount_rate", 0.50),
+            financial_year_end=financial_year_end,
+            opening_non_super_indexed_cost_base=opening_non_super_indexed_cost_base,
+            opening_non_super_deferred_pre_2027_gain=opening_non_super_deferred_pre_2027_gain,
+            opening_non_super_capital_losses=opening_non_super_capital_losses,
+            cgt_indexation_rate=inputs.get("cgt_indexation_rate", inputs.get("inflation_rate", 0.0)),
+            cgt_asset_category=inputs.get("cgt_asset_category", "Other"),
+            cgt_new_residential_method=inputs.get("cgt_new_residential_method", "Indexation and 30% minimum tax"),
+            cgt_held_at_least_12_months=inputs.get("cgt_held_at_least_12_months", True),
+            cgt_reform_enabled=inputs.get("cgt_reform_enabled", True),
         )
 
         taxable_non_super_guess = max(
             cashflow["non_super_before_return"] * non_super_income_return_rate,
             0.0,
         ) + max(cashflow["non_super_discounted_taxable_capital_gain"], 0.0)
+        minimum_tax_capital_gain_guess = max(
+            cashflow["non_super_minimum_tax_capital_gain"], 0.0
+        )
 
     total_super_return_rate = super_income_return_rate + super_capital_return_rate
 
@@ -2075,10 +2352,15 @@ def run_one_year(
         person1_budget_tax["personal_tax_adjustment"]
         + person2_budget_tax["personal_tax_adjustment"]
     )
+    total_cgt_minimum_tax = (
+        person1_cgt_minimum_tax["cgt_minimum_tax_gap"]
+        + person2_cgt_minimum_tax["cgt_minimum_tax_gap"]
+    )
     total_personal_tax = (
         salary_tax_total + non_super_tax_paid + total_division_293_tax
         + total_budget_personal_tax_adjustment
         + trust_result["trustee_minimum_tax"]
+        + total_cgt_minimum_tax
     )
     total_super_contributions_tax = (
         person1_super_contributions_tax + person2_super_contributions_tax
@@ -2104,12 +2386,14 @@ def run_one_year(
         person1_gross_income
         - tax_split["person1_salary_tax_total"]
         - person1_division_293["division_293_tax"]
+        - person1_cgt_minimum_tax["cgt_minimum_tax_gap"]
         + person1_property_and_trust_cash
     )
     person2_net_income = (
         person2_gross_income
         - tax_split["person2_salary_tax_total"]
         - person2_division_293["division_293_tax"]
+        - person2_cgt_minimum_tax["cgt_minimum_tax_gap"]
         + person2_property_and_trust_cash
     )
 
@@ -2143,7 +2427,7 @@ def run_one_year(
         "person1_division_293_super_contributions": person1_division_293["division_293_super_contributions"],
         "person1_division_293_taxable_contributions": person1_division_293["division_293_taxable_contributions"],
         "person1_division_293_tax": person1_division_293["division_293_tax"],
-        "person1_personal_tax_total": tax_split["person1_salary_tax_total"] + (non_super_tax_paid * inputs["non_super_ownership_person1"]) + person1_budget_tax["personal_tax_adjustment"],
+        "person1_personal_tax_total": tax_split["person1_salary_tax_total"] + (non_super_tax_paid * inputs["non_super_ownership_person1"]) + person1_budget_tax["personal_tax_adjustment"] + person1_cgt_minimum_tax["cgt_minimum_tax_gap"],
         "person1_net_income": person1_net_income,
         "person2_income_tax": tax_split["person2_income_tax"],
         "person2_medicare_levy": tax_split["person2_medicare_levy"],
@@ -2155,7 +2439,7 @@ def run_one_year(
         "person2_division_293_super_contributions": person2_division_293["division_293_super_contributions"],
         "person2_division_293_taxable_contributions": person2_division_293["division_293_taxable_contributions"],
         "person2_division_293_tax": person2_division_293["division_293_tax"],
-        "person2_personal_tax_total": tax_split["person2_salary_tax_total"] + (non_super_tax_paid * (1.0 - inputs["non_super_ownership_person1"])) + person2_budget_tax["personal_tax_adjustment"],
+        "person2_personal_tax_total": tax_split["person2_salary_tax_total"] + (non_super_tax_paid * (1.0 - inputs["non_super_ownership_person1"])) + person2_budget_tax["personal_tax_adjustment"] + person2_cgt_minimum_tax["cgt_minimum_tax_gap"],
         "person2_net_income": person2_net_income,
         "household_net_income": person1_net_income + person2_net_income,
         "taxable_non_super_earnings_total": taxable_non_super_guess,
@@ -2241,6 +2525,23 @@ def run_one_year(
         "non_super_realised_capital_gain": cashflow["non_super_realised_capital_gain"],
         "non_super_realised_capital_loss": cashflow["non_super_realised_capital_loss"],
         "non_super_discounted_taxable_capital_gain": cashflow["non_super_discounted_taxable_capital_gain"],
+        "non_super_deferred_pre_2027_gain": cashflow["non_super_deferred_pre_2027_gain"],
+        "non_super_post_2027_real_gain": cashflow["non_super_post_2027_real_gain"],
+        "non_super_minimum_tax_capital_gain": cashflow["non_super_minimum_tax_capital_gain"],
+        "non_super_capital_losses_applied": cashflow["non_super_capital_losses_applied"],
+        "opening_non_super_capital_losses": opening_non_super_capital_losses,
+        "closing_non_super_capital_losses": cashflow["non_super_capital_losses_after_withdrawal"],
+        "opening_non_super_indexed_cost_base": opening_non_super_indexed_cost_base,
+        "opening_non_super_deferred_pre_2027_gain": opening_non_super_deferred_pre_2027_gain,
+        "non_super_indexation_uplift": cashflow["non_super_indexation_uplift"],
+        "non_super_cgt_reform_applies": cashflow["non_super_cgt_reform_applies"],
+        "non_super_cgt_calculation_method": cashflow["non_super_cgt_calculation_method"],
+        "person1_cgt_minimum_tax_gain": person1_cgt_minimum_tax["minimum_tax_capital_gain"],
+        "person2_cgt_minimum_tax_gain": person2_cgt_minimum_tax["minimum_tax_capital_gain"],
+        "person1_cgt_minimum_tax_gap": person1_cgt_minimum_tax["cgt_minimum_tax_gap"],
+        "person2_cgt_minimum_tax_gap": person2_cgt_minimum_tax["cgt_minimum_tax_gap"],
+        "cgt_core_policy_status": CGT_CORE_POLICY_STATUS,
+        "cgt_transition_method_status": CGT_TRANSITION_METHOD_STATUS,
         "person1_extra_accum_withdrawal": cashflow["person1_extra_accum_withdrawal"],
         "person2_extra_accum_withdrawal": cashflow["person2_extra_accum_withdrawal"],
         "person1_extra_pension_withdrawal": cashflow["person1_extra_pension_withdrawal"],
@@ -2312,11 +2613,15 @@ def run_one_year(
         "ending_total_super_balance": total_super_balance,
         "ending_non_super_balance": ending_non_super_balance,
         "ending_non_super_cost_base": ending_non_super_cost_base,
+        "ending_non_super_indexed_cost_base": cashflow["non_super_indexed_cost_base_before_return"],
+        "ending_non_super_deferred_pre_2027_gain": cashflow["non_super_deferred_pre_2027_gain_after_withdrawal"],
+        "ending_non_super_capital_losses": cashflow["non_super_capital_losses_after_withdrawal"],
         "total_personal_tax": total_personal_tax,
         "non_super_tax_paid": non_super_tax_paid,
         "total_super_contributions_tax": total_super_contributions_tax,
         "total_division_293_tax": total_division_293_tax,
         "total_discretionary_trust_minimum_tax": trust_result["trustee_minimum_tax"],
+        "total_cgt_minimum_tax": total_cgt_minimum_tax,
         "total_super_earnings_tax": total_super_earnings_tax,
         "total_tax_paid": total_tax_paid,
         "policy_version": policy_snapshot["policy_version"],
@@ -2352,6 +2657,22 @@ def run_deterministic_projection(inputs):
 
     current_non_super_balance = inputs["non_super_balance"]
     current_non_super_cost_base = inputs["non_super_cost_base"]
+    configured_transition_value = float(
+        inputs.get("non_super_transition_value_2027", inputs["non_super_balance"])
+    )
+    current_non_super_indexed_cost_base = max(
+        configured_transition_value
+        if inputs.get("cgt_asset_acquired_before_2027", True)
+        else float(inputs["non_super_cost_base"]),
+        0.0,
+    )
+    current_non_super_deferred_pre_2027_gain = (
+        configured_transition_value - float(inputs["non_super_cost_base"])
+        if inputs.get("cgt_asset_acquired_before_2027", True) else 0.0
+    )
+    current_non_super_capital_losses = max(
+        float(inputs.get("non_super_opening_capital_losses", 0.0)), 0.0
+    )
     current_residential_property_value = (
         float(inputs.get("residential_property_value", 0.0))
         if inputs.get("residential_property_enabled", False) else 0.0
@@ -2395,6 +2716,9 @@ def run_deterministic_projection(inputs):
             person2_has_started_pension=person2_has_started_pension,
             opening_residential_property_value=current_residential_property_value,
             opening_residential_quarantined_loss=current_residential_quarantined_loss,
+            opening_non_super_indexed_cost_base=current_non_super_indexed_cost_base,
+            opening_non_super_deferred_pre_2027_gain=current_non_super_deferred_pre_2027_gain,
+            opening_non_super_capital_losses=current_non_super_capital_losses,
         )
 
         results.append(result)
@@ -2411,6 +2735,9 @@ def run_deterministic_projection(inputs):
 
         current_non_super_balance = result["ending_non_super_balance"]
         current_non_super_cost_base = result["ending_non_super_cost_base"]
+        current_non_super_indexed_cost_base = result["ending_non_super_indexed_cost_base"]
+        current_non_super_deferred_pre_2027_gain = result["ending_non_super_deferred_pre_2027_gain"]
+        current_non_super_capital_losses = result["ending_non_super_capital_losses"]
         current_residential_property_value = result["ending_residential_property_value"]
         current_residential_quarantined_loss = result["closing_residential_property_quarantined_loss"]
 
@@ -2448,6 +2775,22 @@ def run_single_simulation(inputs, rng, contribution_event_lookup, projection_con
 
     current_non_super_balance = inputs["non_super_balance"]
     current_non_super_cost_base = inputs["non_super_cost_base"]
+    configured_transition_value = float(
+        inputs.get("non_super_transition_value_2027", inputs["non_super_balance"])
+    )
+    current_non_super_indexed_cost_base = max(
+        configured_transition_value
+        if inputs.get("cgt_asset_acquired_before_2027", True)
+        else float(inputs["non_super_cost_base"]),
+        0.0,
+    )
+    current_non_super_deferred_pre_2027_gain = (
+        configured_transition_value - float(inputs["non_super_cost_base"])
+        if inputs.get("cgt_asset_acquired_before_2027", True) else 0.0
+    )
+    current_non_super_capital_losses = max(
+        float(inputs.get("non_super_opening_capital_losses", 0.0)), 0.0
+    )
     current_residential_property_value = (
         float(inputs.get("residential_property_value", 0.0))
         if inputs.get("residential_property_enabled", False) else 0.0
@@ -2505,6 +2848,9 @@ def run_single_simulation(inputs, rng, contribution_event_lookup, projection_con
             person2_has_started_pension=person2_has_started_pension,
             opening_residential_property_value=current_residential_property_value,
             opening_residential_quarantined_loss=current_residential_quarantined_loss,
+            opening_non_super_indexed_cost_base=current_non_super_indexed_cost_base,
+            opening_non_super_deferred_pre_2027_gain=current_non_super_deferred_pre_2027_gain,
+            opening_non_super_capital_losses=current_non_super_capital_losses,
         )
 
         minimal_path_rows.append(make_minimal_path_row(result, simulation_id))
@@ -2524,6 +2870,9 @@ def run_single_simulation(inputs, rng, contribution_event_lookup, projection_con
 
         current_non_super_balance = result["ending_non_super_balance"]
         current_non_super_cost_base = result["ending_non_super_cost_base"]
+        current_non_super_indexed_cost_base = result["ending_non_super_indexed_cost_base"]
+        current_non_super_deferred_pre_2027_gain = result["ending_non_super_deferred_pre_2027_gain"]
+        current_non_super_capital_losses = result["ending_non_super_capital_losses"]
         current_residential_property_value = result["ending_residential_property_value"]
         current_residential_quarantined_loss = result["closing_residential_property_quarantined_loss"]
 

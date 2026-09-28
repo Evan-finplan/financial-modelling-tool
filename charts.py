@@ -202,6 +202,8 @@ def create_tax_breakdown_chart(det_df, inputs, title_text):
         "person1_division_293_tax",
         "person1_super_contributions_tax",
         "person1_total_super_earnings_tax",
+        "total_cgt_minimum_tax",
+        "total_discretionary_trust_minimum_tax",
     ]
 
     if not one_person_mode:
@@ -230,6 +232,8 @@ def create_tax_breakdown_chart(det_df, inputs, title_text):
         "person2_super_contributions_tax": "P2 Super Contributions Tax",
         "person1_total_super_earnings_tax": "P1 Super Earnings Tax",
         "person2_total_super_earnings_tax": "P2 Super Earnings Tax",
+        "total_cgt_minimum_tax": "CGT Minimum-Tax Top-Up",
+        "total_discretionary_trust_minimum_tax": "Trustee Minimum Tax (Draft)",
     }
 
     available_columns = [col for col in tax_columns if col in det_df.columns]

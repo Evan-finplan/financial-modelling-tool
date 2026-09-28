@@ -10,7 +10,7 @@ calculation engine.
 """
 
 
-POLICY_VERSION = "2026-27 Budget phase 2 - residential property and trust minimum tax"
+POLICY_VERSION = "2026-27 Budget phase 3 - CGT, residential property and trust minimum tax"
 POLICY_LAST_REVIEWED = "2026-09-28"
 LATEST_PUBLISHED_SUPER_THRESHOLD_FY = 2027
 
@@ -57,6 +57,11 @@ NEGATIVE_GEARING_RESTRICTION_START_FY = 2028
 DISCRETIONARY_TRUST_MINIMUM_TAX_START_FY = 2029
 DISCRETIONARY_TRUST_MINIMUM_TAX_RATE = 0.30
 DISCRETIONARY_TRUST_MINIMUM_TAX_STATUS = "Exposure draft - not enacted"
+CGT_REFORM_START_FY = 2028
+CGT_MINIMUM_TAX_RATE = 0.30
+CGT_TRANSITION_DATE = "2027-07-01"
+CGT_CORE_POLICY_STATUS = "Enacted - Tax Reform No. 1 Act 2026"
+CGT_TRANSITION_METHOD_STATUS = "Annual pooled estimate; tranche 2 details remain draft"
 
 
 CONCESSIONAL_CONTRIBUTIONS_CAPS = {
@@ -89,6 +94,8 @@ POLICY_SOURCES = {
     "negative_gearing": "https://www.legislation.gov.au/C2026A00049/asmade",
     "negative_gearing_amendments": "https://www.legislation.gov.au/C2026A00071/asmade",
     "discretionary_trust_exposure_draft": "https://consult.treasury.gov.au/c2026-799771",
+    "cgt_reform": "https://www.legislation.gov.au/C2026A00049/asmade",
+    "cgt_tranche_2_consultation": "https://consult.treasury.gov.au/c2026-792170",
 }
 
 
@@ -144,5 +151,9 @@ def get_policy_snapshot(financial_year_end):
         "discretionary_trust_minimum_tax_start_fy": DISCRETIONARY_TRUST_MINIMUM_TAX_START_FY,
         "discretionary_trust_minimum_tax_rate": DISCRETIONARY_TRUST_MINIMUM_TAX_RATE,
         "discretionary_trust_minimum_tax_status": DISCRETIONARY_TRUST_MINIMUM_TAX_STATUS,
+        "cgt_reform_start_fy": CGT_REFORM_START_FY,
+        "cgt_minimum_tax_rate": CGT_MINIMUM_TAX_RATE,
+        "cgt_core_policy_status": CGT_CORE_POLICY_STATUS,
+        "cgt_transition_method_status": CGT_TRANSITION_METHOD_STATUS,
         "policy_version": POLICY_VERSION,
     }

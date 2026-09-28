@@ -64,7 +64,7 @@ The model does not independently test trust legal form or eligibility for every 
 
 The following matters remain outside the calculation engine and should not be inferred from any output:
 
-- full asset-level CGT records, pre/post 1 July 2027 gain segmentation, CPI cost-base indexation, the 30% minimum tax on real capital gains, capital-loss ledgers, and partial disposal ordering;
+- full asset-by-asset CGT parcel records, exact statutory transition apportionment, published quarterly CPI index numbers, and tax-lot disposal ordering beyond the pooled Phase 3 estimate described below;
 - property CGT, depreciation schedules, loan principal amortisation, refinancing, purchase and sale costs, multiple properties, and entity-by-entity residential loss pools;
 - complete Division 293 statutory income inputs, including reportable fringe benefits, net investment loss adjustments, defined benefit contributions, and ATO assessment reconciliation;
 - concessional contribution carry-forward eligibility and non-concessional bring-forward rules;
@@ -78,3 +78,42 @@ The following matters remain outside the calculation engine and should not be in
 - Treasury Laws Amendment (Tax Reform No. 2) Act 2026, Schedule 4: https://www.legislation.gov.au/C2026A00071/asmade
 - Treasury Budget tax changes overview: https://treasury.gov.au/policy-topics/taxation/budget2026-27
 - Minimum tax on discretionary trusts exposure draft: https://consult.treasury.gov.au/c2026-799771
+
+## Phase 3 implementation: 2026 Budget CGT reform
+
+The non-super investment pool now models the core enacted CGT changes for CGT events from the 2027–28 income year:
+
+- a 30 June 2027 transition market value separates deferred pre-1 July 2027 gains from gains accruing after that date;
+- the deferred pre-reform component retains the modelled 50% discount where the 12-month condition is selected;
+- the post-reform cost base is indexed annually using a user-entered CPI estimate, producing an estimated real capital gain;
+- carried-forward capital losses are tracked and applied first to post-reform real gains, then to the deferred pre-reform component;
+- the Division 119 minimum-tax gap is calculated as 30% of the modelled minimum-tax capital gain less basic income tax attributable to that gain, rounded down to whole dollars;
+- the minimum-tax calculation excludes Medicare levy and is calculated separately for each owner according to the non-super ownership percentage;
+- confirmed statutory payment-recipient exemptions can be selected; and
+- qualifying new residential dwellings and affordable housing can be modelled using either the 50% discount or indexation plus the 30% minimum-tax regime.
+
+The core indexation, transition, discount and minimum-tax provisions are enacted in the Treasury Laws Amendment (Tax Reform No. 1) Act 2026 and apply to relevant CGT events from 1 July 2027. The precise transition apportionment and several special-case rules were the subject of Tranche 2 exposure draft consultation in August 2026. The model therefore labels the core policy as enacted while labelling its annual pooled transition method as an estimate.
+
+### Phase 3 modelling limits
+
+The current retirement engine holds one homogeneous non-super asset pool rather than an asset register. It uses annual periods and applies one CPI assumption to the remaining indexed pool. New surplus cash is added to both nominal and indexed cost base at the end of the annual cashflow calculation. Partial sales use the pool's average disposal fraction.
+
+This is suitable for strategic scenario comparison, but not for preparing an income tax return. Tax-return work still requires acquisition dates, individual cost-base elements, actual 30 June 2027 market values or the final permitted apportionment method, published CPI index numbers, residency history, trust statements, loss choices, exemptions, small-business concessions, gifts/conservation deductions, and event-specific legal analysis.
+
+The following CGT matters remain outside Phase 3:
+
+- a multi-asset register and parcel-level sale selection;
+- foreign or temporary resident adjustments;
+- pre-CGT asset K6 calculations;
+- small-business CGT concessions and active-asset reductions;
+- trust-level CGT attribution and beneficiary statement mechanics;
+- deceased-estate, relationship-breakdown and rollover events;
+- gifts and conservation-covenant deductions that may reduce a minimum-tax capital gain;
+- automatic identification of government-payment exemptions; and
+- residential investment property disposal and CGT within the separate property module.
+
+Phase 3 sources:
+
+- Treasury Laws Amendment (Tax Reform No. 1) Act 2026: https://www.legislation.gov.au/C2026A00049/asmade
+- Treasury CGT and negative gearing Tranche 2 consultation: https://consult.treasury.gov.au/c2026-792170
+- Treasury Budget tax changes overview: https://treasury.gov.au/policy-topics/taxation/budget2026-27

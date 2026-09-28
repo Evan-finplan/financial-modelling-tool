@@ -122,6 +122,15 @@ INPUT_EXCEL_FIELDS = [
     "person2_annual_income",
     "non_super_balance",
     "non_super_cost_base",
+    "cgt_reform_enabled",
+    "cgt_asset_acquired_before_2027",
+    "non_super_transition_value_2027",
+    "non_super_opening_capital_losses",
+    "cgt_indexation_rate",
+    "cgt_asset_category",
+    "cgt_new_residential_method",
+    "cgt_held_at_least_12_months",
+    "cgt_minimum_tax_exempt",
     "residential_property_enabled",
     "residential_property_value",
     "residential_property_loan_balance",
@@ -187,6 +196,12 @@ def _coerce_uploaded_input_value(field_name, value):
     if field_name == "assumption_preset":
         if text_value not in {"Conservative", "Base Case", "Optimistic", "Custom"}:
             raise ValueError("assumption_preset must be Conservative, Base Case, Optimistic, or Custom.")
+    if field_name == "cgt_asset_category":
+        if text_value not in {"Other", "New residential dwelling", "Affordable housing"}:
+            raise ValueError("cgt_asset_category is not recognised.")
+    if field_name == "cgt_new_residential_method":
+        if text_value not in {"Indexation and 30% minimum tax", "50% discount"}:
+            raise ValueError("cgt_new_residential_method is not recognised.")
 
     return text_value
 
@@ -506,6 +521,12 @@ def build_assumption_details_df(inputs_by_scenario):
                 "person1_transfer_balance_cap": scenario_inputs["person1_transfer_balance_cap"],
                 "person2_transfer_balance_cap": scenario_inputs["person2_transfer_balance_cap"],
                 "non_super_balance": scenario_inputs["non_super_balance"],
+                "cgt_reform_enabled": scenario_inputs.get("cgt_reform_enabled", True),
+                "non_super_transition_value_2027": scenario_inputs.get("non_super_transition_value_2027", scenario_inputs["non_super_balance"]),
+                "non_super_opening_capital_losses": scenario_inputs.get("non_super_opening_capital_losses", 0.0),
+                "cgt_indexation_rate": scenario_inputs.get("cgt_indexation_rate", scenario_inputs.get("inflation_rate", 0.0)),
+                "cgt_asset_category": scenario_inputs.get("cgt_asset_category", "Other"),
+                "cgt_new_residential_method": scenario_inputs.get("cgt_new_residential_method", "Indexation and 30% minimum tax"),
                 "residential_property_enabled": scenario_inputs.get("residential_property_enabled", False),
                 "residential_property_value": scenario_inputs.get("residential_property_value", 0.0),
                 "residential_property_loan_balance": scenario_inputs.get("residential_property_loan_balance", 0.0),
@@ -737,6 +758,7 @@ def build_adviser_cashflow_asset_movement_tax_df(det_df, inputs):
         "P1 Division 293 Tax": safe_col("person1_division_293_tax"),
         "P2 Total Income Tax": safe_col("person2_personal_tax_total"),
         "P2 Division 293 Tax": safe_col("person2_division_293_tax"),
+        "CGT Minimum-Tax Top-Up": safe_col("total_cgt_minimum_tax"),
         "Trustee Minimum Tax (Draft)": safe_col("total_discretionary_trust_minimum_tax"),
         "Closing Residential Property Equity": safe_col("residential_property_net_equity"),
         "Total Income Tax Per Household": total_income_tax,
@@ -804,6 +826,17 @@ def build_cgt_validation_df(det_df, inputs):
             "P1 Transfer to Pension": safe_col("person1_transfer_to_pension"),
             "P1 Total Net Super Contribution": safe_col("person1_total_net_super_contribution"),
             "P1 Super Realised CGT": safe_col("person1_super_realised_capital_gain"),
+            "Non-Super Realised Gain": safe_col("non_super_realised_capital_gain"),
+            "Deferred Pre-2027 Gain": safe_col("non_super_deferred_pre_2027_gain"),
+            "Post-2027 Real Gain": safe_col("non_super_post_2027_real_gain"),
+            "Taxable Non-Super Gain": safe_col("non_super_discounted_taxable_capital_gain"),
+            "Minimum-Tax Capital Gain": safe_col("non_super_minimum_tax_capital_gain"),
+            "CGT Minimum-Tax Top-Up": safe_col("total_cgt_minimum_tax"),
+            "Indexation Uplift": safe_col("non_super_indexation_uplift"),
+            "Capital Losses Applied": safe_col("non_super_capital_losses_applied"),
+            "Closing Capital Losses": safe_col("ending_non_super_capital_losses"),
+            "Closing Indexed Cost Base": safe_col("ending_non_super_indexed_cost_base"),
+            "CGT Calculation Method": safe_col("non_super_cgt_calculation_method"),
             "Super Withdrawal CGT Tax": safe_col("total_super_withdrawal_cgt_tax"),
             "P1 Pension Earnings Tax": safe_col("person1_pension_earnings_tax"),
             "Super Earnings Tax": safe_col("total_super_earnings_tax"),
@@ -1440,6 +1473,15 @@ defaults = {
     "person2_annual_income": 60000.0,
     "non_super_balance": 500000.0,
     "non_super_cost_base": 300000.0,
+    "cgt_reform_enabled": True,
+    "cgt_asset_acquired_before_2027": True,
+    "non_super_transition_value_2027": 500000.0,
+    "non_super_opening_capital_losses": 0.0,
+    "cgt_indexation_rate": 0.03,
+    "cgt_asset_category": "Other",
+    "cgt_new_residential_method": "Indexation and 30% minimum tax",
+    "cgt_held_at_least_12_months": True,
+    "cgt_minimum_tax_exempt": False,
     "residential_property_enabled": False,
     "residential_property_value": 0.0,
     "residential_property_loan_balance": 0.0,
@@ -1555,6 +1597,15 @@ person2_annual_income = st.session_state.person2_annual_income
 
 non_super_balance = st.session_state.non_super_balance
 non_super_cost_base = st.session_state.non_super_cost_base
+cgt_reform_enabled = st.session_state.cgt_reform_enabled
+cgt_asset_acquired_before_2027 = st.session_state.cgt_asset_acquired_before_2027
+non_super_transition_value_2027 = st.session_state.non_super_transition_value_2027
+non_super_opening_capital_losses = st.session_state.non_super_opening_capital_losses
+cgt_indexation_rate = st.session_state.cgt_indexation_rate
+cgt_asset_category = st.session_state.cgt_asset_category
+cgt_new_residential_method = st.session_state.cgt_new_residential_method
+cgt_held_at_least_12_months = st.session_state.cgt_held_at_least_12_months
+cgt_minimum_tax_exempt = st.session_state.cgt_minimum_tax_exempt
 residential_property_enabled = st.session_state.residential_property_enabled
 residential_property_value = st.session_state.residential_property_value
 residential_property_loan_balance = st.session_state.residential_property_loan_balance
@@ -2239,6 +2290,70 @@ with st.form("input_editor_form", clear_on_submit=False):
                     help_text=t("Share of non-super taxable income and tax allocated to Person 1.", "分配给 Person 1 的非养老金应税收入与税负比例。"),
                 ) * 100.0
 
+        st.divider()
+        st.subheader(t("2026 Budget CGT Reform", "2026 Budget CGT 改革"))
+        st.caption(t(
+            "From 2027-28, the pooled model separates deferred pre-1 July 2027 gains from indexed real gains and estimates the Division 119 30% minimum-tax top-up.",
+            "从 2027–28 财年起，汇总资产池会区分 2027年7月1日前递延增值与指数化后的实际增值，并估算 Division 119 的 30% 最低税补税。",
+        ))
+        cgt_reform_enabled = st.checkbox(
+            t("Apply legislated 2026 Budget CGT reform", "应用已立法的 2026 Budget CGT 改革"),
+            value=bool(st.session_state.cgt_reform_enabled),
+        )
+        cg1, cg2, cg3 = st.columns(3)
+        with cg1:
+            cgt_asset_acquired_before_2027 = st.checkbox(
+                t("Pool held before 1 July 2027", "资产池在 2027年7月1日前已持有"),
+                value=bool(st.session_state.cgt_asset_acquired_before_2027),
+            )
+            non_super_transition_value_2027 = currency_text_input(
+                t("Market Value at 30 June 2027", "2027年6月30日市场价值"),
+                st.session_state.non_super_transition_value_2027,
+                "non_super_transition_value_2027_input",
+                help_text=t("Used to split protected pre-reform gains from post-reform real gains.", "用于区分改革前受保护增值与改革后的实际增值。"),
+            )
+        with cg2:
+            non_super_opening_capital_losses = currency_text_input(
+                t("Opening Carried-Forward Capital Losses", "期初结转资本亏损"),
+                st.session_state.non_super_opening_capital_losses,
+                "non_super_opening_capital_losses_input",
+            )
+            cgt_indexation_rate = percentage_text_input(
+                t("Annual CPI Indexation Estimate", "年度 CPI 指数化估计"),
+                st.session_state.cgt_indexation_rate,
+                "cgt_indexation_rate_input",
+                decimals=2,
+                help_text=t("Projection estimate only; actual tax calculations use published CPI index numbers.", "仅用于预测；实际报税应使用正式公布的 CPI 指数。"),
+            )
+        with cg3:
+            cgt_asset_category = st.selectbox(
+                t("CGT Asset Category", "CGT 资产类别"),
+                options=["Other", "New residential dwelling", "Affordable housing"],
+                index=["Other", "New residential dwelling", "Affordable housing"].index(st.session_state.cgt_asset_category),
+            )
+            cgt_new_residential_method = st.selectbox(
+                t("New/Affordable Housing Method", "新建／可负担住房计算方式"),
+                options=["Indexation and 30% minimum tax", "50% discount"],
+                index=["Indexation and 30% minimum tax", "50% discount"].index(st.session_state.cgt_new_residential_method),
+                help=t("Relevant only when the asset category is new residential dwelling or affordable housing.", "仅在资产类别为新建住宅或可负担住房时适用。"),
+            )
+        cge1, cge2 = st.columns(2)
+        with cge1:
+            cgt_held_at_least_12_months = st.checkbox(
+                t("Asset pool held at least 12 months", "资产池持有至少 12 个月"),
+                value=bool(st.session_state.cgt_held_at_least_12_months),
+            )
+        with cge2:
+            cgt_minimum_tax_exempt = st.checkbox(
+                t("Minimum-tax exemption confirmed", "已确认符合最低税豁免"),
+                value=bool(st.session_state.cgt_minimum_tax_exempt),
+                help=t("Use only for a confirmed statutory payment-recipient exemption.", "仅在确认符合法定政府付款领取者豁免时使用。"),
+            )
+        st.warning(t(
+            "This is a homogeneous pooled-asset estimate. The 1 July 2027 transition allocation and annual CPI projection must be replaced with actual asset records and published CPI for tax return work.",
+            "这是同质化资产池估算。用于报税时，必须以实际资产记录和正式 CPI 替换 2027年7月1日过渡分配及年度 CPI 预测。",
+        ))
+
     elif active_input_section == "property_trust":
         st.subheader(t("Residential Investment Property", "住宅投资物业"))
         st.caption(t(
@@ -2592,6 +2707,15 @@ st.session_state.person1_annual_income = person1_annual_income
 st.session_state.person2_annual_income = person2_annual_income
 st.session_state.non_super_balance = non_super_balance
 st.session_state.non_super_cost_base = non_super_cost_base
+st.session_state.cgt_reform_enabled = bool(cgt_reform_enabled)
+st.session_state.cgt_asset_acquired_before_2027 = bool(cgt_asset_acquired_before_2027)
+st.session_state.non_super_transition_value_2027 = non_super_transition_value_2027
+st.session_state.non_super_opening_capital_losses = non_super_opening_capital_losses
+st.session_state.cgt_indexation_rate = cgt_indexation_rate
+st.session_state.cgt_asset_category = cgt_asset_category
+st.session_state.cgt_new_residential_method = cgt_new_residential_method
+st.session_state.cgt_held_at_least_12_months = bool(cgt_held_at_least_12_months)
+st.session_state.cgt_minimum_tax_exempt = bool(cgt_minimum_tax_exempt)
 st.session_state.residential_property_enabled = bool(residential_property_enabled)
 st.session_state.residential_property_value = residential_property_value
 st.session_state.residential_property_loan_balance = residential_property_loan_balance
@@ -2687,6 +2811,15 @@ base_inputs = {
     "person2_transfer_balance_cap": 0.0 if is_one_person_mode else float(st.session_state.person2_transfer_balance_cap),
     "non_super_balance": float(st.session_state.non_super_balance),
     "non_super_cost_base": float(st.session_state.non_super_cost_base),
+    "cgt_reform_enabled": bool(st.session_state.cgt_reform_enabled),
+    "cgt_asset_acquired_before_2027": bool(st.session_state.cgt_asset_acquired_before_2027),
+    "non_super_transition_value_2027": float(st.session_state.non_super_transition_value_2027),
+    "non_super_opening_capital_losses": float(st.session_state.non_super_opening_capital_losses),
+    "cgt_indexation_rate": float(st.session_state.cgt_indexation_rate),
+    "cgt_asset_category": st.session_state.cgt_asset_category,
+    "cgt_new_residential_method": st.session_state.cgt_new_residential_method,
+    "cgt_held_at_least_12_months": bool(st.session_state.cgt_held_at_least_12_months),
+    "cgt_minimum_tax_exempt": bool(st.session_state.cgt_minimum_tax_exempt),
     "residential_property_enabled": bool(st.session_state.residential_property_enabled),
     "residential_property_value": float(st.session_state.residential_property_value),
     "residential_property_loan_balance": float(st.session_state.residential_property_loan_balance),
@@ -2951,6 +3084,13 @@ if active_result_bundle is not None and workspace_mode == "View Results":
                 "信托最低税栏位为 exposure draft 估算，并非已生效法案结果。",
             ))
             st.dataframe(build_residential_trust_tax_detail_df(display_det_df), use_container_width=True)
+
+            st.subheader(t("2026 Budget CGT Reconciliation", "2026 Budget CGT 对账"))
+            st.caption(t(
+                "Core CGT reform is enacted. Transition allocation and CPI values shown here are pooled planning estimates and require asset-level tax-return reconciliation.",
+                "CGT 核心改革已经立法；此处的过渡分配和 CPI 数值属于汇总规划估算，报税时必须按单项资产对账。",
+            ))
+            st.dataframe(build_cgt_validation_df(display_det_df, selected_result["inputs"]), use_container_width=True)
 
             pension_tax_free_summary_df = build_pension_tax_free_summary_df(display_det_df, selected_result["inputs"])
             st.subheader(t("Pension Tax-Free Validation Summary", "退休金免税验证摘要"))

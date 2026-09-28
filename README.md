@@ -32,6 +32,7 @@ A Streamlit-based financial modelling tool for analysing retirement outcomes und
 - Superannuation contributions & earnings tax
 - Pension phase tax treatment
 - Capital gains tax (average cost method)
+- 2026 Budget CGT transition split, CPI-indexed cost base, capital-loss ledger, and 30% minimum-tax estimate
 - Division 293 tax estimate for high-income clients
 - 2026-27 SG maximum earnings base and indexed super caps
 - Residential investment property cashflow and legislated negative-gearing loss quarantine

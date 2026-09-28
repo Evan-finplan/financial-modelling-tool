@@ -125,7 +125,7 @@ class ProjectionIntegrationTests(unittest.TestCase):
         self.assertEqual(result["policy_general_transfer_balance_cap"], 2_100_000.0)
         self.assertEqual(
             result["policy_version"],
-            "2026-27 Budget phase 2 - residential property and trust minimum tax",
+            "2026-27 Budget phase 3 - CGT, residential property and trust minimum tax",
         )
 
 
