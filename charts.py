@@ -199,6 +199,7 @@ def create_tax_breakdown_chart(det_df, inputs, title_text):
         "person1_medicare_levy",
         "person1_income_tax_on_non_super_earnings",
         "person1_medicare_levy_on_non_super_earnings",
+        "person1_division_293_tax",
         "person1_super_contributions_tax",
         "person1_total_super_earnings_tax",
     ]
@@ -209,6 +210,7 @@ def create_tax_breakdown_chart(det_df, inputs, title_text):
             "person2_medicare_levy",
             "person2_income_tax_on_non_super_earnings",
             "person2_medicare_levy_on_non_super_earnings",
+            "person2_division_293_tax",
             "person2_super_contributions_tax",
             "person2_total_super_earnings_tax",
         ])
@@ -222,6 +224,8 @@ def create_tax_breakdown_chart(det_df, inputs, title_text):
         "person2_medicare_levy": "P2 Salary Medicare Levy",
         "person2_income_tax_on_non_super_earnings": "P2 Non-Super Income Tax",
         "person2_medicare_levy_on_non_super_earnings": "P2 Non-Super Medicare Levy",
+        "person1_division_293_tax": "P1 Division 293 Tax",
+        "person2_division_293_tax": "P2 Division 293 Tax",
         "person1_super_contributions_tax": "P1 Super Contributions Tax",
         "person2_super_contributions_tax": "P2 Super Contributions Tax",
         "person1_total_super_earnings_tax": "P1 Super Earnings Tax",

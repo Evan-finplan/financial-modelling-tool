@@ -3,54 +3,25 @@ import copy
 import numpy as np
 import pandas as pd
 
+from policy import (
+    DIVISION_293_TAX_RATE,
+    DIVISION_293_THRESHOLD,
+    LATEST_PUBLISHED_SUPER_THRESHOLD_FY,
+    MEDICARE_LEVY_RATE,
+    PERSONAL_TAX_SCHEDULES,
+    SUPER_CONTRIBUTIONS_TAX_RATE,
+    SUPER_EARNINGS_TAX_RATE,
+    SUPER_GUARANTEE_RATE,
+    get_concessional_contributions_cap,
+    get_non_concessional_contributions_cap,
+    get_policy_snapshot,
+    get_super_guarantee_maximum_earnings_base,
+)
+
 
 # ============================================================
 # SECTION: TAX CONFIGURATION
 # ============================================================
-
-PERSONAL_TAX_SCHEDULES = {
-    2026: [
-        (0.0, 18_200.0, 0.00),
-        (18_200.0, 45_000.0, 0.16),
-        (45_000.0, 135_000.0, 0.30),
-        (135_000.0, 190_000.0, 0.37),
-        (190_000.0, float("inf"), 0.45),
-    ],
-    2027: [
-        (0.0, 18_200.0, 0.00),
-        (18_200.0, 45_000.0, 0.15),
-        (45_000.0, 135_000.0, 0.30),
-        (135_000.0, 190_000.0, 0.37),
-        (190_000.0, float("inf"), 0.45),
-    ],
-    "2028_PLUS": [
-        (0.0, 18_200.0, 0.00),
-        (18_200.0, 45_000.0, 0.14),
-        (45_000.0, 135_000.0, 0.30),
-        (135_000.0, 190_000.0, 0.37),
-        (190_000.0, float("inf"), 0.45),
-    ],
-}
-
-MEDICARE_LEVY_RATE = 0.02
-SUPER_CONTRIBUTIONS_TAX_RATE = 0.15
-SUPER_EARNINGS_TAX_RATE = 0.15
-SUPER_GUARANTEE_RATE = 0.12
-
-
-# ---------- NEW: Dynamic contribution caps ----------
-def get_concessional_contributions_cap(financial_year_end):
-    fy_end = int(financial_year_end)
-    if fy_end >= 2027:
-        return 32_500.0
-    return 30_000.0
-
-
-def get_non_concessional_contributions_cap(financial_year_end):
-    fy_end = int(financial_year_end)
-    if fy_end >= 2027:
-        return 130_000.0
-    return 120_000.0
 
 
 # ============================================================
@@ -440,6 +411,58 @@ def calculate_super_contributions_tax(gross_concessional_contribution):
     return gross_concessional_contribution * SUPER_CONTRIBUTIONS_TAX_RATE
 
 
+def calculate_super_guarantee_contribution(gross_income, financial_year_end):
+    """Estimate employer SG using the published maximum earnings base."""
+    gross_income = max(float(gross_income), 0.0)
+    maximum_earnings_base = get_super_guarantee_maximum_earnings_base(financial_year_end)
+    sg_earnings_base = min(gross_income, maximum_earnings_base)
+    return {
+        "gross_income": gross_income,
+        "maximum_earnings_base": maximum_earnings_base,
+        "sg_earnings_base": sg_earnings_base,
+        "sg_contribution": sg_earnings_base * SUPER_GUARANTEE_RATE,
+        "income_above_sg_base": max(gross_income - maximum_earnings_base, 0.0),
+    }
+
+
+def calculate_division_293_tax(
+    division_293_income,
+    concessional_contributions,
+    financial_year_end,
+):
+    """Estimate Division 293 tax from the income components held by the model.
+
+    The complete statutory income definition includes items that the model does
+    not currently capture, such as reportable fringe benefits and net rental
+    property losses. The result is therefore an estimate based on modelled
+    taxable income and concessional contributions.
+    """
+    division_293_income = max(float(division_293_income), 0.0)
+    concessional_contributions = max(float(concessional_contributions), 0.0)
+    concessional_cap = get_concessional_contributions_cap(financial_year_end)
+    division_293_super_contributions = min(concessional_contributions, concessional_cap)
+    combined_income_and_contributions = (
+        division_293_income + division_293_super_contributions
+    )
+    amount_above_threshold = max(
+        combined_income_and_contributions - DIVISION_293_THRESHOLD,
+        0.0,
+    )
+    taxable_contributions = min(
+        division_293_super_contributions,
+        amount_above_threshold,
+    )
+
+    return {
+        "division_293_income": division_293_income,
+        "division_293_super_contributions": division_293_super_contributions,
+        "division_293_combined_income": combined_income_and_contributions,
+        "division_293_amount_above_threshold": amount_above_threshold,
+        "division_293_taxable_contributions": taxable_contributions,
+        "division_293_tax": taxable_contributions * DIVISION_293_TAX_RATE,
+    }
+
+
 def auto_transfer_to_pension(
     accum_balance,
     pension_balance,
@@ -795,6 +818,16 @@ def validate_inputs(inputs):
 def generate_input_warnings(inputs):
     warnings = []
 
+    start_fy = parse_financial_year_label(inputs["start_financial_year"])
+    projection_end_fy = start_fy + int(inputs["projection_years"]) - 1
+    if projection_end_fy > LATEST_PUBLISHED_SUPER_THRESHOLD_FY:
+        warnings.append(
+            f"Published indexed super thresholds are currently configured through "
+            f"{LATEST_PUBLISHED_SUPER_THRESHOLD_FY}FY. Later projection years retain the "
+            "latest known contribution caps, general transfer balance cap, and SG maximum "
+            "earnings base until policy settings are refreshed."
+        )
+
     years_to_person1_retirement = inputs["person1_retirement_age"] - inputs["person1_current_age"]
     years_to_person2_retirement = inputs["person2_retirement_age"] - inputs["person2_current_age"]
 
@@ -823,8 +856,6 @@ def generate_input_warnings(inputs):
 
     events_df = normalise_contribution_events(inputs.get("contribution_events"), household_mode=inputs.get("household_mode", "Two People"))
     if not events_df.empty:
-        start_fy = parse_financial_year_label(inputs["start_financial_year"])
-
         for _, row in events_df.iterrows():
             fy_end = parse_financial_year_label(row["financial_year"])
             person = row["person"]
@@ -843,7 +874,10 @@ def generate_input_warnings(inputs):
 
             if contribution_type == "personal_deductible":
                 indexed_income = person_income * ((1 + inputs["inflation_rate"]) ** max(year_offset, 0))
-                estimated_sg = indexed_income * SUPER_GUARANTEE_RATE
+                estimated_sg = calculate_super_guarantee_contribution(
+                    indexed_income,
+                    fy_end,
+                )["sg_contribution"]
                 estimated_total_concessional = estimated_sg + amount
                 concessional_cap = get_concessional_contributions_cap(fy_end)
 
@@ -886,6 +920,13 @@ def generate_input_warnings(inputs):
 
 def generate_output_warnings(summary_df, failure_prob_df, det_df):
     warnings = []
+
+    if "total_division_293_tax" in det_df.columns and det_df["total_division_293_tax"].sum() > 0:
+        warnings.append(
+            "Division 293 tax is an estimate based on income components available in this model. "
+            "Confirm reportable fringe benefits, net investment or rental losses, defined benefit "
+            "contributions, and the final ATO assessment before relying on it for advice."
+        )
 
     success_rate = summary_df["success"].mean()
     p10_final_wealth = summary_df["final_wealth"].quantile(0.10)
@@ -941,6 +982,9 @@ def calculate_household_personal_tax_split(
     ownership_person1,
     person1_personal_deductible_contribution,
     person2_personal_deductible_contribution,
+    person1_gross_concessional_contribution,
+    person2_gross_concessional_contribution,
+    financial_year_end,
     tax_schedule_key,
 ):
     ownership_person1 = float(ownership_person1)
@@ -970,6 +1014,17 @@ def calculate_household_personal_tax_split(
     person2_tax_result = calculate_personal_income_tax(
         taxable_income=person2_taxable_income,
         tax_schedule_key=tax_schedule_key,
+    )
+
+    person1_division_293 = calculate_division_293_tax(
+        division_293_income=person1_taxable_income,
+        concessional_contributions=person1_gross_concessional_contribution,
+        financial_year_end=financial_year_end,
+    )
+    person2_division_293 = calculate_division_293_tax(
+        division_293_income=person2_taxable_income,
+        concessional_contributions=person2_gross_concessional_contribution,
+        financial_year_end=financial_year_end,
     )
 
     person1_alloc = allocate_tax_proportionally(
@@ -1019,6 +1074,10 @@ def calculate_household_personal_tax_split(
         "person1_medicare_levy_on_non_super_earnings": p1_non_super_medicare,
         "person1_non_super_tax_total": person1_alloc["non_super"],
         "person1_personal_tax_total": person1_tax_result["personal_tax_total"],
+        "person1_division_293_income": person1_division_293["division_293_income"],
+        "person1_division_293_super_contributions": person1_division_293["division_293_super_contributions"],
+        "person1_division_293_taxable_contributions": person1_division_293["division_293_taxable_contributions"],
+        "person1_division_293_tax": person1_division_293["division_293_tax"],
         "person2_income_tax": p2_income_tax,
         "person2_medicare_levy": p2_medicare,
         "person2_salary_tax_total": person2_alloc["salary"],
@@ -1026,6 +1085,10 @@ def calculate_household_personal_tax_split(
         "person2_medicare_levy_on_non_super_earnings": p2_non_super_medicare,
         "person2_non_super_tax_total": person2_alloc["non_super"],
         "person2_personal_tax_total": person2_tax_result["personal_tax_total"],
+        "person2_division_293_income": person2_division_293["division_293_income"],
+        "person2_division_293_super_contributions": person2_division_293["division_293_super_contributions"],
+        "person2_division_293_taxable_contributions": person2_division_293["division_293_taxable_contributions"],
+        "person2_division_293_tax": person2_division_293["division_293_tax"],
     }
 
 
@@ -1390,17 +1453,25 @@ def run_one_year(
 
     if person1_is_working:
         person1_gross_income = float(person1_income_indexed)
-        person1_sg_contribution = person1_gross_income * SUPER_GUARANTEE_RATE
     else:
         person1_gross_income = 0.0
-        person1_sg_contribution = 0.0
+
+    person1_sg_result = calculate_super_guarantee_contribution(
+        gross_income=person1_gross_income,
+        financial_year_end=financial_year_end,
+    )
+    person1_sg_contribution = person1_sg_result["sg_contribution"]
 
     if person2_is_working:
         person2_gross_income = float(person2_income_indexed)
-        person2_sg_contribution = person2_gross_income * SUPER_GUARANTEE_RATE
     else:
         person2_gross_income = 0.0
-        person2_sg_contribution = 0.0
+
+    person2_sg_result = calculate_super_guarantee_contribution(
+        gross_income=person2_gross_income,
+        financial_year_end=financial_year_end,
+    )
+    person2_sg_contribution = person2_sg_result["sg_contribution"]
 
     financial_year_lookup_key = str(financial_year_end)
 
@@ -1519,11 +1590,22 @@ def run_one_year(
             ownership_person1=inputs["non_super_ownership_person1"],
             person1_personal_deductible_contribution=person1_personal_deductible_contribution,
             person2_personal_deductible_contribution=person2_personal_deductible_contribution,
+            person1_gross_concessional_contribution=person1_gross_concessional_contribution,
+            person2_gross_concessional_contribution=person2_gross_concessional_contribution,
+            financial_year_end=financial_year_end,
             tax_schedule_key=tax_schedule_key,
         )
 
-        person1_net_income = person1_gross_income - tax_split["person1_salary_tax_total"]
-        person2_net_income = person2_gross_income - tax_split["person2_salary_tax_total"]
+        person1_net_income = (
+            person1_gross_income
+            - tax_split["person1_salary_tax_total"]
+            - tax_split["person1_division_293_tax"]
+        )
+        person2_net_income = (
+            person2_gross_income
+            - tax_split["person2_salary_tax_total"]
+            - tax_split["person2_division_293_tax"]
+        )
 
         cashflow = solve_cashflow_before_returns(
             person1_net_income=person1_net_income,
@@ -1695,7 +1777,11 @@ def run_one_year(
         tax_split["person1_salary_tax_total"]
         + tax_split["person2_salary_tax_total"]
     )
-    total_personal_tax = salary_tax_total + non_super_tax_paid
+    total_division_293_tax = (
+        tax_split["person1_division_293_tax"]
+        + tax_split["person2_division_293_tax"]
+    )
+    total_personal_tax = salary_tax_total + non_super_tax_paid + total_division_293_tax
     total_super_contributions_tax = (
         person1_super_contributions_tax + person2_super_contributions_tax
     )
@@ -1715,8 +1801,18 @@ def run_one_year(
     )
     total_wealth = total_super_balance + ending_non_super_balance
 
-    person1_net_income = person1_gross_income - tax_split["person1_salary_tax_total"]
-    person2_net_income = person2_gross_income - tax_split["person2_salary_tax_total"]
+    person1_net_income = (
+        person1_gross_income
+        - tax_split["person1_salary_tax_total"]
+        - tax_split["person1_division_293_tax"]
+    )
+    person2_net_income = (
+        person2_gross_income
+        - tax_split["person2_salary_tax_total"]
+        - tax_split["person2_division_293_tax"]
+    )
+
+    policy_snapshot = get_policy_snapshot(financial_year_end)
 
     return {
         "year_index": year_index,
@@ -1742,6 +1838,10 @@ def run_one_year(
         "person1_income_tax_on_non_super_earnings": tax_split["person1_income_tax_on_non_super_earnings"],
         "person1_medicare_levy_on_non_super_earnings": tax_split["person1_medicare_levy_on_non_super_earnings"],
         "person1_non_super_tax_total": tax_split["person1_non_super_tax_total"],
+        "person1_division_293_income": tax_split["person1_division_293_income"],
+        "person1_division_293_super_contributions": tax_split["person1_division_293_super_contributions"],
+        "person1_division_293_taxable_contributions": tax_split["person1_division_293_taxable_contributions"],
+        "person1_division_293_tax": tax_split["person1_division_293_tax"],
         "person1_personal_tax_total": tax_split["person1_salary_tax_total"] + (non_super_tax_paid * inputs["non_super_ownership_person1"]),
         "person1_net_income": person1_net_income,
         "person2_income_tax": tax_split["person2_income_tax"],
@@ -1750,6 +1850,10 @@ def run_one_year(
         "person2_income_tax_on_non_super_earnings": tax_split["person2_income_tax_on_non_super_earnings"],
         "person2_medicare_levy_on_non_super_earnings": tax_split["person2_medicare_levy_on_non_super_earnings"],
         "person2_non_super_tax_total": tax_split["person2_non_super_tax_total"],
+        "person2_division_293_income": tax_split["person2_division_293_income"],
+        "person2_division_293_super_contributions": tax_split["person2_division_293_super_contributions"],
+        "person2_division_293_taxable_contributions": tax_split["person2_division_293_taxable_contributions"],
+        "person2_division_293_tax": tax_split["person2_division_293_tax"],
         "person2_personal_tax_total": tax_split["person2_salary_tax_total"] + (non_super_tax_paid * (1.0 - inputs["non_super_ownership_person1"])),
         "person2_net_income": person2_net_income,
         "household_net_income": person1_net_income + person2_net_income,
@@ -1759,6 +1863,11 @@ def run_one_year(
         "spending": current_spending,
         "person1_sg_contribution": person1_sg_contribution,
         "person2_sg_contribution": person2_sg_contribution,
+        "person1_sg_earnings_base": person1_sg_result["sg_earnings_base"],
+        "person2_sg_earnings_base": person2_sg_result["sg_earnings_base"],
+        "person1_income_above_sg_base": person1_sg_result["income_above_sg_base"],
+        "person2_income_above_sg_base": person2_sg_result["income_above_sg_base"],
+        "super_guarantee_maximum_earnings_base": person1_sg_result["maximum_earnings_base"],
         "person1_personal_deductible_contribution": person1_personal_deductible_contribution,
         "person2_personal_deductible_contribution": person2_personal_deductible_contribution,
         "person1_non_concessional_contribution": person1_non_concessional_contribution,
@@ -1873,8 +1982,13 @@ def run_one_year(
         "total_personal_tax": total_personal_tax,
         "non_super_tax_paid": non_super_tax_paid,
         "total_super_contributions_tax": total_super_contributions_tax,
+        "total_division_293_tax": total_division_293_tax,
         "total_super_earnings_tax": total_super_earnings_tax,
         "total_tax_paid": total_tax_paid,
+        "policy_version": policy_snapshot["policy_version"],
+        "policy_concessional_contributions_cap": policy_snapshot["concessional_contributions_cap"],
+        "policy_non_concessional_contributions_cap": policy_snapshot["non_concessional_contributions_cap"],
+        "policy_general_transfer_balance_cap": policy_snapshot["general_transfer_balance_cap"],
         "total_wealth": total_wealth,
     }
 

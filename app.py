@@ -582,11 +582,14 @@ def build_tax_summary_df(det_df):
     summary = {
         "person1_salary_tax_total": det_df["person1_salary_tax_total"].sum() if "person1_salary_tax_total" in det_df.columns else 0.0,
         "person1_non_super_tax_total": det_df["person1_non_super_tax_total"].sum() if "person1_non_super_tax_total" in det_df.columns else 0.0,
+        "person1_division_293_tax": det_df["person1_division_293_tax"].sum() if "person1_division_293_tax" in det_df.columns else 0.0,
         "person1_total_personal_tax": det_df["person1_personal_tax_total"].sum() if "person1_personal_tax_total" in det_df.columns else 0.0,
         "person2_salary_tax_total": det_df["person2_salary_tax_total"].sum() if "person2_salary_tax_total" in det_df.columns else 0.0,
         "person2_non_super_tax_total": det_df["person2_non_super_tax_total"].sum() if "person2_non_super_tax_total" in det_df.columns else 0.0,
+        "person2_division_293_tax": det_df["person2_division_293_tax"].sum() if "person2_division_293_tax" in det_df.columns else 0.0,
         "person2_total_personal_tax": det_df["person2_personal_tax_total"].sum() if "person2_personal_tax_total" in det_df.columns else 0.0,
         "total_super_contributions_tax": det_df["total_super_contributions_tax"].sum() if "total_super_contributions_tax" in det_df.columns else 0.0,
+        "total_division_293_tax": det_df["total_division_293_tax"].sum() if "total_division_293_tax" in det_df.columns else 0.0,
         "total_super_earnings_tax": det_df["total_super_earnings_tax"].sum() if "total_super_earnings_tax" in det_df.columns else 0.0,
         "total_tax_paid": det_df["total_tax_paid"].sum() if "total_tax_paid" in det_df.columns else 0.0,
     }
@@ -675,7 +678,11 @@ def build_adviser_cashflow_asset_movement_tax_df(det_df, inputs):
         + safe_col("total_minimum_pension_drawdown")
         + safe_col("total_extra_super_withdrawal")
     )
-    total_income_tax = safe_col("person1_personal_tax_total") + safe_col("person2_personal_tax_total")
+    total_income_tax = (
+        safe_col("person1_personal_tax_total")
+        + safe_col("person2_personal_tax_total")
+        + safe_col("total_division_293_tax")
+    )
 
     movement_df = pd.DataFrame({
         "Year": safe_col("financial_year_end"),
@@ -690,7 +697,9 @@ def build_adviser_cashflow_asset_movement_tax_df(det_df, inputs):
         "Extra Super Withdrawal": safe_col("total_extra_super_withdrawal"),
         "Total Withdrawals": total_withdrawals,
         "P1 Total Income Tax": safe_col("person1_personal_tax_total"),
+        "P1 Division 293 Tax": safe_col("person1_division_293_tax"),
         "P2 Total Income Tax": safe_col("person2_personal_tax_total"),
+        "P2 Division 293 Tax": safe_col("person2_division_293_tax"),
         "Total Income Tax Per Household": total_income_tax,
         "Super Contributions Tax": safe_col("total_super_contributions_tax"),
         "Super Earnings Tax": safe_col("total_super_earnings_tax"),
@@ -703,7 +712,10 @@ def build_adviser_cashflow_asset_movement_tax_df(det_df, inputs):
     })
 
     if is_one_person_inputs(inputs):
-        movement_df = movement_df.drop(columns=["P2 Total Income Tax"], errors="ignore")
+        movement_df = movement_df.drop(
+            columns=["P2 Total Income Tax", "P2 Division 293 Tax"],
+            errors="ignore",
+        )
 
     return movement_df
 
