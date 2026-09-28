@@ -122,6 +122,35 @@ INPUT_EXCEL_FIELDS = [
     "person2_annual_income",
     "non_super_balance",
     "non_super_cost_base",
+    "cgt_reform_enabled",
+    "cgt_asset_acquired_before_2027",
+    "non_super_transition_value_2027",
+    "non_super_opening_capital_losses",
+    "cgt_indexation_rate",
+    "cgt_asset_category",
+    "cgt_new_residential_method",
+    "cgt_held_at_least_12_months",
+    "cgt_minimum_tax_exempt",
+    "residential_property_enabled",
+    "residential_property_value",
+    "residential_property_loan_balance",
+    "residential_property_gross_rent",
+    "residential_property_operating_expenses",
+    "residential_property_interest_rate",
+    "residential_property_capital_growth_rate",
+    "residential_property_rent_growth_rate",
+    "residential_property_expense_growth_rate",
+    "residential_property_opening_quarantined_loss",
+    "residential_property_acquired_before_budget_time",
+    "residential_property_is_new_build",
+    "residential_property_is_exempt_housing",
+    "residential_property_ownership_person1_pct",
+    "discretionary_trust_enabled",
+    "discretionary_trust_net_income",
+    "discretionary_trust_excluded_income",
+    "discretionary_trust_income_growth_rate",
+    "discretionary_trust_subject_to_minimum_tax",
+    "discretionary_trust_ownership_person1_pct",
     "annual_living_expenses",
     "retirement_spending",
     "non_super_ownership_person1_pct",
@@ -167,6 +196,12 @@ def _coerce_uploaded_input_value(field_name, value):
     if field_name == "assumption_preset":
         if text_value not in {"Conservative", "Base Case", "Optimistic", "Custom"}:
             raise ValueError("assumption_preset must be Conservative, Base Case, Optimistic, or Custom.")
+    if field_name == "cgt_asset_category":
+        if text_value not in {"Other", "New residential dwelling", "Affordable housing"}:
+            raise ValueError("cgt_asset_category is not recognised.")
+    if field_name == "cgt_new_residential_method":
+        if text_value not in {"Indexation and 30% minimum tax", "50% discount"}:
+            raise ValueError("cgt_new_residential_method is not recognised.")
 
     return text_value
 
@@ -486,6 +521,24 @@ def build_assumption_details_df(inputs_by_scenario):
                 "person1_transfer_balance_cap": scenario_inputs["person1_transfer_balance_cap"],
                 "person2_transfer_balance_cap": scenario_inputs["person2_transfer_balance_cap"],
                 "non_super_balance": scenario_inputs["non_super_balance"],
+                "cgt_reform_enabled": scenario_inputs.get("cgt_reform_enabled", True),
+                "non_super_transition_value_2027": scenario_inputs.get("non_super_transition_value_2027", scenario_inputs["non_super_balance"]),
+                "non_super_opening_capital_losses": scenario_inputs.get("non_super_opening_capital_losses", 0.0),
+                "cgt_indexation_rate": scenario_inputs.get("cgt_indexation_rate", scenario_inputs.get("inflation_rate", 0.0)),
+                "cgt_asset_category": scenario_inputs.get("cgt_asset_category", "Other"),
+                "cgt_new_residential_method": scenario_inputs.get("cgt_new_residential_method", "Indexation and 30% minimum tax"),
+                "residential_property_enabled": scenario_inputs.get("residential_property_enabled", False),
+                "residential_property_value": scenario_inputs.get("residential_property_value", 0.0),
+                "residential_property_loan_balance": scenario_inputs.get("residential_property_loan_balance", 0.0),
+                "residential_property_gross_rent": scenario_inputs.get("residential_property_gross_rent", 0.0),
+                "residential_property_operating_expenses": scenario_inputs.get("residential_property_operating_expenses", 0.0),
+                "residential_property_interest_rate": scenario_inputs.get("residential_property_interest_rate", 0.0),
+                "residential_property_acquired_before_budget_time": scenario_inputs.get("residential_property_acquired_before_budget_time", False),
+                "residential_property_is_new_build": scenario_inputs.get("residential_property_is_new_build", False),
+                "discretionary_trust_enabled": scenario_inputs.get("discretionary_trust_enabled", False),
+                "discretionary_trust_net_income": scenario_inputs.get("discretionary_trust_net_income", 0.0),
+                "discretionary_trust_excluded_income": scenario_inputs.get("discretionary_trust_excluded_income", 0.0),
+                "discretionary_trust_subject_to_minimum_tax": scenario_inputs.get("discretionary_trust_subject_to_minimum_tax", True),
                 "person1_annual_income": scenario_inputs["person1_annual_income"],
                 "person2_annual_income": scenario_inputs["person2_annual_income"],
                 "annual_living_expenses": scenario_inputs["annual_living_expenses"],
@@ -582,11 +635,14 @@ def build_tax_summary_df(det_df):
     summary = {
         "person1_salary_tax_total": det_df["person1_salary_tax_total"].sum() if "person1_salary_tax_total" in det_df.columns else 0.0,
         "person1_non_super_tax_total": det_df["person1_non_super_tax_total"].sum() if "person1_non_super_tax_total" in det_df.columns else 0.0,
+        "person1_division_293_tax": det_df["person1_division_293_tax"].sum() if "person1_division_293_tax" in det_df.columns else 0.0,
         "person1_total_personal_tax": det_df["person1_personal_tax_total"].sum() if "person1_personal_tax_total" in det_df.columns else 0.0,
         "person2_salary_tax_total": det_df["person2_salary_tax_total"].sum() if "person2_salary_tax_total" in det_df.columns else 0.0,
         "person2_non_super_tax_total": det_df["person2_non_super_tax_total"].sum() if "person2_non_super_tax_total" in det_df.columns else 0.0,
+        "person2_division_293_tax": det_df["person2_division_293_tax"].sum() if "person2_division_293_tax" in det_df.columns else 0.0,
         "person2_total_personal_tax": det_df["person2_personal_tax_total"].sum() if "person2_personal_tax_total" in det_df.columns else 0.0,
         "total_super_contributions_tax": det_df["total_super_contributions_tax"].sum() if "total_super_contributions_tax" in det_df.columns else 0.0,
+        "total_division_293_tax": det_df["total_division_293_tax"].sum() if "total_division_293_tax" in det_df.columns else 0.0,
         "total_super_earnings_tax": det_df["total_super_earnings_tax"].sum() if "total_super_earnings_tax" in det_df.columns else 0.0,
         "total_tax_paid": det_df["total_tax_paid"].sum() if "total_tax_paid" in det_df.columns else 0.0,
     }
@@ -660,6 +716,8 @@ def build_adviser_cashflow_asset_movement_tax_df(det_df, inputs):
         + safe_col("opening_person1_pension_super_balance")
         + safe_col("opening_person2_accum_super_balance")
         + safe_col("opening_person2_pension_super_balance")
+        + safe_col("opening_residential_property_value")
+        - safe_col("residential_property_loan_balance")
     )
 
     closing_net_assets = safe_col("total_wealth")
@@ -675,13 +733,20 @@ def build_adviser_cashflow_asset_movement_tax_df(det_df, inputs):
         + safe_col("total_minimum_pension_drawdown")
         + safe_col("total_extra_super_withdrawal")
     )
-    total_income_tax = safe_col("person1_personal_tax_total") + safe_col("person2_personal_tax_total")
+    total_income_tax = (
+        safe_col("person1_personal_tax_total")
+        + safe_col("person2_personal_tax_total")
+        + safe_col("total_division_293_tax")
+        + safe_col("total_discretionary_trust_minimum_tax")
+    )
 
     movement_df = pd.DataFrame({
         "Year": safe_col("financial_year_end"),
         "Opening Net Assets": opening_net_assets,
         "Employment Income": safe_col("household_gross_income"),
         "Investment Earnings": investment_earnings,
+        "Residential Property Net Cashflow": safe_col("residential_property_net_cashflow"),
+        "Discretionary Trust Net Income": safe_col("discretionary_trust_net_income"),
         "Total Income": safe_col("household_gross_income") + investment_earnings,
         "Household Spending": safe_col("spending"),
         "Cash Contributions": safe_col("total_cash_contributions"),
@@ -690,7 +755,12 @@ def build_adviser_cashflow_asset_movement_tax_df(det_df, inputs):
         "Extra Super Withdrawal": safe_col("total_extra_super_withdrawal"),
         "Total Withdrawals": total_withdrawals,
         "P1 Total Income Tax": safe_col("person1_personal_tax_total"),
+        "P1 Division 293 Tax": safe_col("person1_division_293_tax"),
         "P2 Total Income Tax": safe_col("person2_personal_tax_total"),
+        "P2 Division 293 Tax": safe_col("person2_division_293_tax"),
+        "CGT Minimum-Tax Top-Up": safe_col("total_cgt_minimum_tax"),
+        "Trustee Minimum Tax (Draft)": safe_col("total_discretionary_trust_minimum_tax"),
+        "Closing Residential Property Equity": safe_col("residential_property_net_equity"),
         "Total Income Tax Per Household": total_income_tax,
         "Super Contributions Tax": safe_col("total_super_contributions_tax"),
         "Super Earnings Tax": safe_col("total_super_earnings_tax"),
@@ -703,9 +773,38 @@ def build_adviser_cashflow_asset_movement_tax_df(det_df, inputs):
     })
 
     if is_one_person_inputs(inputs):
-        movement_df = movement_df.drop(columns=["P2 Total Income Tax"], errors="ignore")
+        movement_df = movement_df.drop(
+            columns=["P2 Total Income Tax", "P2 Division 293 Tax"],
+            errors="ignore",
+        )
 
     return movement_df
+
+
+def build_residential_trust_tax_detail_df(det_df):
+    df = det_df.copy()
+
+    def safe_col(name):
+        return df[name] if name in df.columns else 0.0
+
+    return pd.DataFrame({
+        "Year": safe_col("financial_year_end"),
+        "Property Restriction Applies": safe_col("residential_property_restriction_applies"),
+        "Gross Rent": safe_col("residential_property_gross_rent"),
+        "Property Deductions": safe_col("residential_property_total_deductions"),
+        "Property Net Cashflow": safe_col("residential_property_net_cashflow"),
+        "Taxable Rental Income": safe_col("residential_property_taxable_income"),
+        "Current Quarantined Loss": safe_col("residential_property_current_year_quarantined_loss"),
+        "Quarantined Loss Used": safe_col("residential_property_quarantined_loss_used"),
+        "Closing Quarantined Loss": safe_col("closing_residential_property_quarantined_loss"),
+        "Property Net Equity": safe_col("residential_property_net_equity"),
+        "Trust Net Income": safe_col("discretionary_trust_net_income"),
+        "Trust Excluded Income": safe_col("discretionary_trust_excluded_income"),
+        "Trust Minimum-Tax Income": safe_col("discretionary_trust_minimum_tax_income"),
+        "Trustee Minimum Tax (Draft)": safe_col("discretionary_trust_trustee_minimum_tax"),
+        "P1 Trust Credit": safe_col("person1_trust_tax_credit"),
+        "P2 Trust Credit": safe_col("person2_trust_tax_credit"),
+    })
 
 
 def build_cgt_validation_df(det_df, inputs):
@@ -727,6 +826,17 @@ def build_cgt_validation_df(det_df, inputs):
             "P1 Transfer to Pension": safe_col("person1_transfer_to_pension"),
             "P1 Total Net Super Contribution": safe_col("person1_total_net_super_contribution"),
             "P1 Super Realised CGT": safe_col("person1_super_realised_capital_gain"),
+            "Non-Super Realised Gain": safe_col("non_super_realised_capital_gain"),
+            "Deferred Pre-2027 Gain": safe_col("non_super_deferred_pre_2027_gain"),
+            "Post-2027 Real Gain": safe_col("non_super_post_2027_real_gain"),
+            "Taxable Non-Super Gain": safe_col("non_super_discounted_taxable_capital_gain"),
+            "Minimum-Tax Capital Gain": safe_col("non_super_minimum_tax_capital_gain"),
+            "CGT Minimum-Tax Top-Up": safe_col("total_cgt_minimum_tax"),
+            "Indexation Uplift": safe_col("non_super_indexation_uplift"),
+            "Capital Losses Applied": safe_col("non_super_capital_losses_applied"),
+            "Closing Capital Losses": safe_col("ending_non_super_capital_losses"),
+            "Closing Indexed Cost Base": safe_col("ending_non_super_indexed_cost_base"),
+            "CGT Calculation Method": safe_col("non_super_cgt_calculation_method"),
             "Super Withdrawal CGT Tax": safe_col("total_super_withdrawal_cgt_tax"),
             "P1 Pension Earnings Tax": safe_col("person1_pension_earnings_tax"),
             "Super Earnings Tax": safe_col("total_super_earnings_tax"),
@@ -1363,6 +1473,35 @@ defaults = {
     "person2_annual_income": 60000.0,
     "non_super_balance": 500000.0,
     "non_super_cost_base": 300000.0,
+    "cgt_reform_enabled": True,
+    "cgt_asset_acquired_before_2027": True,
+    "non_super_transition_value_2027": 500000.0,
+    "non_super_opening_capital_losses": 0.0,
+    "cgt_indexation_rate": 0.03,
+    "cgt_asset_category": "Other",
+    "cgt_new_residential_method": "Indexation and 30% minimum tax",
+    "cgt_held_at_least_12_months": True,
+    "cgt_minimum_tax_exempt": False,
+    "residential_property_enabled": False,
+    "residential_property_value": 0.0,
+    "residential_property_loan_balance": 0.0,
+    "residential_property_gross_rent": 0.0,
+    "residential_property_operating_expenses": 0.0,
+    "residential_property_interest_rate": 0.06,
+    "residential_property_capital_growth_rate": 0.03,
+    "residential_property_rent_growth_rate": 0.03,
+    "residential_property_expense_growth_rate": 0.03,
+    "residential_property_opening_quarantined_loss": 0.0,
+    "residential_property_acquired_before_budget_time": False,
+    "residential_property_is_new_build": False,
+    "residential_property_is_exempt_housing": False,
+    "residential_property_ownership_person1_pct": 50.0,
+    "discretionary_trust_enabled": False,
+    "discretionary_trust_net_income": 0.0,
+    "discretionary_trust_excluded_income": 0.0,
+    "discretionary_trust_income_growth_rate": 0.03,
+    "discretionary_trust_subject_to_minimum_tax": True,
+    "discretionary_trust_ownership_person1_pct": 50.0,
     "annual_living_expenses": 90000.0,
     "retirement_spending": 100000.0,
     "non_super_ownership_person1_pct": 50.0,
@@ -1458,6 +1597,35 @@ person2_annual_income = st.session_state.person2_annual_income
 
 non_super_balance = st.session_state.non_super_balance
 non_super_cost_base = st.session_state.non_super_cost_base
+cgt_reform_enabled = st.session_state.cgt_reform_enabled
+cgt_asset_acquired_before_2027 = st.session_state.cgt_asset_acquired_before_2027
+non_super_transition_value_2027 = st.session_state.non_super_transition_value_2027
+non_super_opening_capital_losses = st.session_state.non_super_opening_capital_losses
+cgt_indexation_rate = st.session_state.cgt_indexation_rate
+cgt_asset_category = st.session_state.cgt_asset_category
+cgt_new_residential_method = st.session_state.cgt_new_residential_method
+cgt_held_at_least_12_months = st.session_state.cgt_held_at_least_12_months
+cgt_minimum_tax_exempt = st.session_state.cgt_minimum_tax_exempt
+residential_property_enabled = st.session_state.residential_property_enabled
+residential_property_value = st.session_state.residential_property_value
+residential_property_loan_balance = st.session_state.residential_property_loan_balance
+residential_property_gross_rent = st.session_state.residential_property_gross_rent
+residential_property_operating_expenses = st.session_state.residential_property_operating_expenses
+residential_property_interest_rate = st.session_state.residential_property_interest_rate
+residential_property_capital_growth_rate = st.session_state.residential_property_capital_growth_rate
+residential_property_rent_growth_rate = st.session_state.residential_property_rent_growth_rate
+residential_property_expense_growth_rate = st.session_state.residential_property_expense_growth_rate
+residential_property_opening_quarantined_loss = st.session_state.residential_property_opening_quarantined_loss
+residential_property_acquired_before_budget_time = st.session_state.residential_property_acquired_before_budget_time
+residential_property_is_new_build = st.session_state.residential_property_is_new_build
+residential_property_is_exempt_housing = st.session_state.residential_property_is_exempt_housing
+residential_property_ownership_person1 = st.session_state.residential_property_ownership_person1_pct
+discretionary_trust_enabled = st.session_state.discretionary_trust_enabled
+discretionary_trust_net_income = st.session_state.discretionary_trust_net_income
+discretionary_trust_excluded_income = st.session_state.discretionary_trust_excluded_income
+discretionary_trust_income_growth_rate = st.session_state.discretionary_trust_income_growth_rate
+discretionary_trust_subject_to_minimum_tax = st.session_state.discretionary_trust_subject_to_minimum_tax
+discretionary_trust_ownership_person1 = st.session_state.discretionary_trust_ownership_person1_pct
 annual_living_expenses = st.session_state.annual_living_expenses
 retirement_spending = st.session_state.retirement_spending
 non_super_ownership_person1 = st.session_state.non_super_ownership_person1_pct
@@ -1803,6 +1971,7 @@ section_keys = [
     "projection",
     "person1",
     "household",
+    "property_trust",
     "contributions",
     "returns",
     "simulation",
@@ -1816,6 +1985,7 @@ section_labels = {
     "person1": t("Person 1", "人物 1"),
     "person2": t("Person 2", "人物 2"),
     "household": t("Household", "家庭"),
+    "property_trust": t("Property & Trust", "住宅与信托"),
     "contributions": t("Contributions", "缴款设置"),
     "returns": t("Returns", "回报假设"),
     "simulation": t("Simulation", "模拟设置"),
@@ -1827,6 +1997,7 @@ legacy_section_map = {
     "Person 1": "person1",
     "Person 2": "person2",
     "Household": "household",
+    "Property & Trust": "property_trust",
     "Contributions": "contributions",
     "Returns": "returns",
     "Simulation": "simulation",
@@ -1835,6 +2006,7 @@ legacy_section_map = {
     "人物 1": "person1",
     "人物 2": "person2",
     "家庭": "household",
+    "住宅与信托": "property_trust",
     "缴款设置": "contributions",
     "回报假设": "returns",
     "模拟设置": "simulation",
@@ -2118,6 +2290,209 @@ with st.form("input_editor_form", clear_on_submit=False):
                     help_text=t("Share of non-super taxable income and tax allocated to Person 1.", "分配给 Person 1 的非养老金应税收入与税负比例。"),
                 ) * 100.0
 
+        st.divider()
+        st.subheader(t("2026 Budget CGT Reform", "2026 Budget CGT 改革"))
+        st.caption(t(
+            "From 2027-28, the pooled model separates deferred pre-1 July 2027 gains from indexed real gains and estimates the Division 119 30% minimum-tax top-up.",
+            "从 2027–28 财年起，汇总资产池会区分 2027年7月1日前递延增值与指数化后的实际增值，并估算 Division 119 的 30% 最低税补税。",
+        ))
+        cgt_reform_enabled = st.checkbox(
+            t("Apply legislated 2026 Budget CGT reform", "应用已立法的 2026 Budget CGT 改革"),
+            value=bool(st.session_state.cgt_reform_enabled),
+        )
+        cg1, cg2, cg3 = st.columns(3)
+        with cg1:
+            cgt_asset_acquired_before_2027 = st.checkbox(
+                t("Pool held before 1 July 2027", "资产池在 2027年7月1日前已持有"),
+                value=bool(st.session_state.cgt_asset_acquired_before_2027),
+            )
+            non_super_transition_value_2027 = currency_text_input(
+                t("Market Value at 30 June 2027", "2027年6月30日市场价值"),
+                st.session_state.non_super_transition_value_2027,
+                "non_super_transition_value_2027_input",
+                help_text=t("Used to split protected pre-reform gains from post-reform real gains.", "用于区分改革前受保护增值与改革后的实际增值。"),
+            )
+        with cg2:
+            non_super_opening_capital_losses = currency_text_input(
+                t("Opening Carried-Forward Capital Losses", "期初结转资本亏损"),
+                st.session_state.non_super_opening_capital_losses,
+                "non_super_opening_capital_losses_input",
+            )
+            cgt_indexation_rate = percentage_text_input(
+                t("Annual CPI Indexation Estimate", "年度 CPI 指数化估计"),
+                st.session_state.cgt_indexation_rate,
+                "cgt_indexation_rate_input",
+                decimals=2,
+                help_text=t("Projection estimate only; actual tax calculations use published CPI index numbers.", "仅用于预测；实际报税应使用正式公布的 CPI 指数。"),
+            )
+        with cg3:
+            cgt_asset_category = st.selectbox(
+                t("CGT Asset Category", "CGT 资产类别"),
+                options=["Other", "New residential dwelling", "Affordable housing"],
+                index=["Other", "New residential dwelling", "Affordable housing"].index(st.session_state.cgt_asset_category),
+            )
+            cgt_new_residential_method = st.selectbox(
+                t("New/Affordable Housing Method", "新建／可负担住房计算方式"),
+                options=["Indexation and 30% minimum tax", "50% discount"],
+                index=["Indexation and 30% minimum tax", "50% discount"].index(st.session_state.cgt_new_residential_method),
+                help=t("Relevant only when the asset category is new residential dwelling or affordable housing.", "仅在资产类别为新建住宅或可负担住房时适用。"),
+            )
+        cge1, cge2 = st.columns(2)
+        with cge1:
+            cgt_held_at_least_12_months = st.checkbox(
+                t("Asset pool held at least 12 months", "资产池持有至少 12 个月"),
+                value=bool(st.session_state.cgt_held_at_least_12_months),
+            )
+        with cge2:
+            cgt_minimum_tax_exempt = st.checkbox(
+                t("Minimum-tax exemption confirmed", "已确认符合最低税豁免"),
+                value=bool(st.session_state.cgt_minimum_tax_exempt),
+                help=t("Use only for a confirmed statutory payment-recipient exemption.", "仅在确认符合法定政府付款领取者豁免时使用。"),
+            )
+        st.warning(t(
+            "This is a homogeneous pooled-asset estimate. The 1 July 2027 transition allocation and annual CPI projection must be replaced with actual asset records and published CPI for tax return work.",
+            "这是同质化资产池估算。用于报税时，必须以实际资产记录和正式 CPI 替换 2027年7月1日过渡分配及年度 CPI 预测。",
+        ))
+
+    elif active_input_section == "property_trust":
+        st.subheader(t("Residential Investment Property", "住宅投资物业"))
+        st.caption(t(
+            "Models one aggregate residential investment. Loss quarantine starts in 2027-28 for affected established properties.",
+            "以一个汇总住宅投资建模。受影响的存量住宅从 2027–28 财年起适用亏损隔离。",
+        ))
+        residential_property_enabled = st.checkbox(
+            t("Include residential investment property", "纳入住宅投资物业"),
+            value=bool(st.session_state.residential_property_enabled),
+        )
+        rp1, rp2, rp3 = st.columns(3)
+        with rp1:
+            residential_property_value = currency_text_input(
+                t("Opening Property Value", "期初物业价值"),
+                st.session_state.residential_property_value,
+                "residential_property_value_input",
+            )
+            residential_property_gross_rent = currency_text_input(
+                t("Annual Gross Rent", "年度租金总收入"),
+                st.session_state.residential_property_gross_rent,
+                "residential_property_gross_rent_input",
+            )
+            residential_property_capital_growth_rate = percentage_text_input(
+                t("Property Capital Growth", "物业资本增长率"),
+                st.session_state.residential_property_capital_growth_rate,
+                "residential_property_capital_growth_rate_input",
+                decimals=1,
+            )
+        with rp2:
+            residential_property_loan_balance = currency_text_input(
+                t("Interest-Only Loan Balance", "只付息贷款余额"),
+                st.session_state.residential_property_loan_balance,
+                "residential_property_loan_balance_input",
+            )
+            residential_property_operating_expenses = currency_text_input(
+                t("Annual Deductible Expenses", "年度可扣除费用"),
+                st.session_state.residential_property_operating_expenses,
+                "residential_property_operating_expenses_input",
+                help_text=t("Excludes loan interest, which is calculated separately.", "不含贷款利息；利息会单独计算。"),
+            )
+            residential_property_interest_rate = percentage_text_input(
+                t("Loan Interest Rate", "贷款利率"),
+                st.session_state.residential_property_interest_rate,
+                "residential_property_interest_rate_input",
+                decimals=2,
+            )
+        with rp3:
+            residential_property_opening_quarantined_loss = currency_text_input(
+                t("Opening Quarantined Loss", "期初隔离亏损"),
+                st.session_state.residential_property_opening_quarantined_loss,
+                "residential_property_opening_quarantined_loss_input",
+            )
+            residential_property_rent_growth_rate = percentage_text_input(
+                t("Rent Growth", "租金增长率"),
+                st.session_state.residential_property_rent_growth_rate,
+                "residential_property_rent_growth_rate_input",
+                decimals=1,
+            )
+            residential_property_expense_growth_rate = percentage_text_input(
+                t("Expense Growth", "费用增长率"),
+                st.session_state.residential_property_expense_growth_rate,
+                "residential_property_expense_growth_rate_input",
+                decimals=1,
+            )
+
+        rq1, rq2, rq3 = st.columns(3)
+        with rq1:
+            residential_property_acquired_before_budget_time = st.checkbox(
+                t("Acquired before 7:30pm AEST 12 May 2026", "在 2026年5月12日 AEST 19:30 前取得"),
+                value=bool(st.session_state.residential_property_acquired_before_budget_time),
+            )
+        with rq2:
+            residential_property_is_new_build = st.checkbox(
+                t("Qualifying new build", "符合条件的新建住宅"),
+                value=bool(st.session_state.residential_property_is_new_build),
+            )
+        with rq3:
+            residential_property_is_exempt_housing = st.checkbox(
+                t("Qualifying exempt housing", "符合条件的豁免住房"),
+                value=bool(st.session_state.residential_property_is_exempt_housing),
+                help=t("Use only after confirming the statutory housing exception.", "仅在确认符合法定住房例外后使用。"),
+            )
+
+        if is_one_person_mode:
+            residential_property_ownership_person1 = 100.0
+        else:
+            residential_property_ownership_person1 = percentage_text_input(
+                t("Person 1 Property Ownership", "人物 1 物业持有比例"),
+                st.session_state.residential_property_ownership_person1_pct / 100.0,
+                "residential_property_ownership_person1_input",
+                decimals=1,
+            ) * 100.0
+
+        st.divider()
+        st.subheader(t("Discretionary Trust Minimum Tax", "Discretionary Trust 最低税"))
+        st.warning(t(
+            "Policy scenario only: the 30% minimum tax is based on the September 2026 exposure draft and is not enacted law.",
+            "仅作政策情景：30% 最低税依据 2026 年 9 月 exposure draft，目前尚未立法。",
+        ))
+        discretionary_trust_enabled = st.checkbox(
+            t("Include discretionary trust income", "纳入 discretionary trust 收入"),
+            value=bool(st.session_state.discretionary_trust_enabled),
+        )
+        dt1, dt2, dt3 = st.columns(3)
+        with dt1:
+            discretionary_trust_net_income = currency_text_input(
+                t("Annual Trust Net Income", "年度信托净收入"),
+                st.session_state.discretionary_trust_net_income,
+                "discretionary_trust_net_income_input",
+            )
+        with dt2:
+            discretionary_trust_excluded_income = currency_text_input(
+                t("Excluded Income", "豁免收入"),
+                st.session_state.discretionary_trust_excluded_income,
+                "discretionary_trust_excluded_income_input",
+                help_text=t("For example, confirmed primary production or other draft-law exclusions.", "例如已确认的 primary production 或草案列明的其他豁免收入。"),
+            )
+        with dt3:
+            discretionary_trust_income_growth_rate = percentage_text_input(
+                t("Trust Income Growth", "信托收入增长率"),
+                st.session_state.discretionary_trust_income_growth_rate,
+                "discretionary_trust_income_growth_rate_input",
+                decimals=1,
+            )
+        discretionary_trust_subject_to_minimum_tax = st.checkbox(
+            t("Trust is subject to the draft minimum tax", "该信托适用最低税草案"),
+            value=bool(st.session_state.discretionary_trust_subject_to_minimum_tax),
+            help=t("Turn off for a confirmed excluded trust or a valid fixed-distribution election scenario.", "若已确认属于豁免信托或有效选择固定分配情景，可关闭。"),
+        )
+        if is_one_person_mode:
+            discretionary_trust_ownership_person1 = 100.0
+        else:
+            discretionary_trust_ownership_person1 = percentage_text_input(
+                t("Person 1 Trust Distribution", "人物 1 信托分配比例"),
+                st.session_state.discretionary_trust_ownership_person1_pct / 100.0,
+                "discretionary_trust_ownership_person1_input",
+                decimals=1,
+            ) * 100.0
+
     elif active_input_section == "contributions":
         st.subheader(t("Contribution Schedule", "缴款计划"))
         contribution_person_options = ["Person 1"] if is_one_person_mode else ["Person 1", "Person 2"]
@@ -2332,6 +2707,35 @@ st.session_state.person1_annual_income = person1_annual_income
 st.session_state.person2_annual_income = person2_annual_income
 st.session_state.non_super_balance = non_super_balance
 st.session_state.non_super_cost_base = non_super_cost_base
+st.session_state.cgt_reform_enabled = bool(cgt_reform_enabled)
+st.session_state.cgt_asset_acquired_before_2027 = bool(cgt_asset_acquired_before_2027)
+st.session_state.non_super_transition_value_2027 = non_super_transition_value_2027
+st.session_state.non_super_opening_capital_losses = non_super_opening_capital_losses
+st.session_state.cgt_indexation_rate = cgt_indexation_rate
+st.session_state.cgt_asset_category = cgt_asset_category
+st.session_state.cgt_new_residential_method = cgt_new_residential_method
+st.session_state.cgt_held_at_least_12_months = bool(cgt_held_at_least_12_months)
+st.session_state.cgt_minimum_tax_exempt = bool(cgt_minimum_tax_exempt)
+st.session_state.residential_property_enabled = bool(residential_property_enabled)
+st.session_state.residential_property_value = residential_property_value
+st.session_state.residential_property_loan_balance = residential_property_loan_balance
+st.session_state.residential_property_gross_rent = residential_property_gross_rent
+st.session_state.residential_property_operating_expenses = residential_property_operating_expenses
+st.session_state.residential_property_interest_rate = residential_property_interest_rate
+st.session_state.residential_property_capital_growth_rate = residential_property_capital_growth_rate
+st.session_state.residential_property_rent_growth_rate = residential_property_rent_growth_rate
+st.session_state.residential_property_expense_growth_rate = residential_property_expense_growth_rate
+st.session_state.residential_property_opening_quarantined_loss = residential_property_opening_quarantined_loss
+st.session_state.residential_property_acquired_before_budget_time = bool(residential_property_acquired_before_budget_time)
+st.session_state.residential_property_is_new_build = bool(residential_property_is_new_build)
+st.session_state.residential_property_is_exempt_housing = bool(residential_property_is_exempt_housing)
+st.session_state.residential_property_ownership_person1_pct = residential_property_ownership_person1
+st.session_state.discretionary_trust_enabled = bool(discretionary_trust_enabled)
+st.session_state.discretionary_trust_net_income = discretionary_trust_net_income
+st.session_state.discretionary_trust_excluded_income = discretionary_trust_excluded_income
+st.session_state.discretionary_trust_income_growth_rate = discretionary_trust_income_growth_rate
+st.session_state.discretionary_trust_subject_to_minimum_tax = bool(discretionary_trust_subject_to_minimum_tax)
+st.session_state.discretionary_trust_ownership_person1_pct = discretionary_trust_ownership_person1
 st.session_state.annual_living_expenses = annual_living_expenses
 st.session_state.retirement_spending = retirement_spending
 st.session_state.non_super_ownership_person1_pct = non_super_ownership_person1
@@ -2407,6 +2811,35 @@ base_inputs = {
     "person2_transfer_balance_cap": 0.0 if is_one_person_mode else float(st.session_state.person2_transfer_balance_cap),
     "non_super_balance": float(st.session_state.non_super_balance),
     "non_super_cost_base": float(st.session_state.non_super_cost_base),
+    "cgt_reform_enabled": bool(st.session_state.cgt_reform_enabled),
+    "cgt_asset_acquired_before_2027": bool(st.session_state.cgt_asset_acquired_before_2027),
+    "non_super_transition_value_2027": float(st.session_state.non_super_transition_value_2027),
+    "non_super_opening_capital_losses": float(st.session_state.non_super_opening_capital_losses),
+    "cgt_indexation_rate": float(st.session_state.cgt_indexation_rate),
+    "cgt_asset_category": st.session_state.cgt_asset_category,
+    "cgt_new_residential_method": st.session_state.cgt_new_residential_method,
+    "cgt_held_at_least_12_months": bool(st.session_state.cgt_held_at_least_12_months),
+    "cgt_minimum_tax_exempt": bool(st.session_state.cgt_minimum_tax_exempt),
+    "residential_property_enabled": bool(st.session_state.residential_property_enabled),
+    "residential_property_value": float(st.session_state.residential_property_value),
+    "residential_property_loan_balance": float(st.session_state.residential_property_loan_balance),
+    "residential_property_gross_rent": float(st.session_state.residential_property_gross_rent),
+    "residential_property_operating_expenses": float(st.session_state.residential_property_operating_expenses),
+    "residential_property_interest_rate": float(st.session_state.residential_property_interest_rate),
+    "residential_property_capital_growth_rate": float(st.session_state.residential_property_capital_growth_rate),
+    "residential_property_rent_growth_rate": float(st.session_state.residential_property_rent_growth_rate),
+    "residential_property_expense_growth_rate": float(st.session_state.residential_property_expense_growth_rate),
+    "residential_property_opening_quarantined_loss": float(st.session_state.residential_property_opening_quarantined_loss),
+    "residential_property_acquired_before_budget_time": bool(st.session_state.residential_property_acquired_before_budget_time),
+    "residential_property_is_new_build": bool(st.session_state.residential_property_is_new_build),
+    "residential_property_is_exempt_housing": bool(st.session_state.residential_property_is_exempt_housing),
+    "residential_property_ownership_person1": 1.0 if is_one_person_mode else float(st.session_state.residential_property_ownership_person1_pct) / 100.0,
+    "discretionary_trust_enabled": bool(st.session_state.discretionary_trust_enabled),
+    "discretionary_trust_net_income": float(st.session_state.discretionary_trust_net_income),
+    "discretionary_trust_excluded_income": float(st.session_state.discretionary_trust_excluded_income),
+    "discretionary_trust_income_growth_rate": float(st.session_state.discretionary_trust_income_growth_rate),
+    "discretionary_trust_subject_to_minimum_tax": bool(st.session_state.discretionary_trust_subject_to_minimum_tax),
+    "discretionary_trust_ownership_person1": 1.0 if is_one_person_mode else float(st.session_state.discretionary_trust_ownership_person1_pct) / 100.0,
     "person1_annual_income": float(st.session_state.person1_annual_income),
     "person2_annual_income": 0.0 if is_one_person_mode else float(st.session_state.person2_annual_income),
     "annual_living_expenses": float(st.session_state.annual_living_expenses),
@@ -2645,6 +3078,20 @@ if active_result_bundle is not None and workspace_mode == "View Results":
             total_tax_fig.update_layout(xaxis_title=t("Financial Year", "财政年度"), yaxis_title=t("Annual Tax", "年度税款"))
             st.plotly_chart(total_tax_fig, use_container_width=True, key=chart_key("total_tax", selected_scenario, view_mode, "adviser_lazy"))
 
+            st.subheader(t("Residential Property & Trust Tax Detail", "住宅物业与信托税务明细"))
+            st.caption(t(
+                "Trust minimum tax rows are exposure-draft estimates, not enacted-law outcomes.",
+                "信托最低税栏位为 exposure draft 估算，并非已生效法案结果。",
+            ))
+            st.dataframe(build_residential_trust_tax_detail_df(display_det_df), use_container_width=True)
+
+            st.subheader(t("2026 Budget CGT Reconciliation", "2026 Budget CGT 对账"))
+            st.caption(t(
+                "Core CGT reform is enacted. Transition allocation and CPI values shown here are pooled planning estimates and require asset-level tax-return reconciliation.",
+                "CGT 核心改革已经立法；此处的过渡分配和 CPI 数值属于汇总规划估算，报税时必须按单项资产对账。",
+            ))
+            st.dataframe(build_cgt_validation_df(display_det_df, selected_result["inputs"]), use_container_width=True)
+
             pension_tax_free_summary_df = build_pension_tax_free_summary_df(display_det_df, selected_result["inputs"])
             st.subheader(t("Pension Tax-Free Validation Summary", "退休金免税验证摘要"))
             st.dataframe(pension_tax_free_summary_df, use_container_width=True)
@@ -2697,6 +3144,7 @@ if active_result_bundle is not None and workspace_mode == "View Results":
                 pension_tax_free_summary_df = build_pension_tax_free_summary_df(display_det_df, selected_result["inputs"])
                 debug_df = build_adviser_debug_df(display_det_df, selected_result["inputs"])
                 cgt_validation_df = build_cgt_validation_df(display_det_df, selected_result["inputs"])
+                residential_trust_tax_df = build_residential_trust_tax_detail_df(display_det_df)
                 excel_file = dataframe_to_excel_bytes({
                     "input_summary": input_summary_df,
                     "assumption_details": assumption_details_df,
@@ -2710,6 +3158,7 @@ if active_result_bundle is not None and workspace_mode == "View Results":
                     "adviser_debug_table": debug_df,
                     "pension_tax_free_summary": pension_tax_free_summary_df,
                     "cgt_validation_detail": cgt_validation_df,
+                    "property_trust_tax": residential_trust_tax_df,
                 })
                 st.download_button(
                     label=t("Download Excel", "下载 Excel"),

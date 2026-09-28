@@ -32,6 +32,11 @@ A Streamlit-based financial modelling tool for analysing retirement outcomes und
 - Superannuation contributions & earnings tax
 - Pension phase tax treatment
 - Capital gains tax (average cost method)
+- 2026 Budget CGT transition split, CPI-indexed cost base, capital-loss ledger, and 30% minimum-tax estimate
+- Division 293 tax estimate for high-income clients
+- 2026-27 SG maximum earnings base and indexed super caps
+- Residential investment property cashflow and legislated negative-gearing loss quarantine
+- Discretionary trust 30% minimum-tax policy scenario (exposure draft; not enacted)
 - Retirement income sustainability
 
 ---
@@ -40,6 +45,16 @@ A Streamlit-based financial modelling tool for analysing retirement outcomes und
 
 pip install -r requirements.txt  
 streamlit run app.py
+
+## Automated tests
+
+Run the policy and projection regression suite with:
+
+```text
+python -m unittest discover -s tests -v
+```
+
+The 2026-27 policy scope, exclusions, and modelling assumptions are documented in `BUDGET_2026_NOTES.md`.
 
 ---
 
@@ -63,4 +78,3 @@ It does not constitute financial advice.
 
 - Margaret (Yunfei) Chen
 - Jinglei Zhang  
-
