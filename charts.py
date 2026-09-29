@@ -4,11 +4,28 @@ import plotly.graph_objects as go
 import plotly.io as pio
 
 
-JBWERE_COLOURWAY = ["#00205B", "#5B91A4", "#7AAFC0", "#334B5C", "#8AA0AE", "#4D7890"]
+VIVID_COLOURWAY = [
+    "#1F77B4",
+    "#FF7F0E",
+    "#2CA02C",
+    "#D62728",
+    "#9467BD",
+    "#8C564B",
+    "#E377C2",
+    "#17BECF",
+    "#BCBD22",
+    "#636EFA",
+    "#EF553B",
+    "#00CC96",
+    "#AB63FA",
+    "#FFA15A",
+    "#19D3F3",
+    "#FF6692",
+]
 
 pio.templates["jbwere"] = go.layout.Template(
     layout=go.Layout(
-        colorway=JBWERE_COLOURWAY,
+        colorway=VIVID_COLOURWAY,
         font=dict(family="Arial, sans-serif", size=12, color="#182A3A"),
         title=dict(font=dict(family="Arial, sans-serif", size=18, color="#00205B")),
         paper_bgcolor="#FFFFFF",
@@ -19,7 +36,7 @@ pio.templates["jbwere"] = go.layout.Template(
     )
 )
 pio.templates.default = "plotly_white+jbwere"
-px.defaults.color_discrete_sequence = JBWERE_COLOURWAY
+px.defaults.color_discrete_sequence = VIVID_COLOURWAY
 
 
 # ============================================================
@@ -147,6 +164,7 @@ def create_percentile_paths_chart(percentile_df, inputs, title_text):
             y=percentile_df["p10"],
             mode="lines",
             name="P10",
+            line=dict(color="#D62728", width=3),
             hovertemplate="Financial Year: %{x}FY<br>P10: $%{y:,.0f}<extra></extra>",
         )
     )
@@ -156,6 +174,7 @@ def create_percentile_paths_chart(percentile_df, inputs, title_text):
             y=percentile_df["p50"],
             mode="lines",
             name="P50",
+            line=dict(color="#1F77B4", width=4),
             hovertemplate="Financial Year: %{x}FY<br>P50: $%{y:,.0f}<extra></extra>",
         )
     )
@@ -165,6 +184,7 @@ def create_percentile_paths_chart(percentile_df, inputs, title_text):
             y=percentile_df["p90"],
             mode="lines",
             name="P90",
+            line=dict(color="#2CA02C", width=3),
             hovertemplate="Financial Year: %{x}FY<br>P90: $%{y:,.0f}<extra></extra>",
         )
     )
@@ -190,6 +210,7 @@ def create_failure_probability_chart(failure_prob_df, inputs, title_text):
             y=failure_prob_df["failure_probability"],
             mode="lines",
             name="Failure Probability",
+            line=dict(color="#D62728", width=4),
             hovertemplate="Financial Year: %{x}FY<br>Failure Probability: %{y:.1%}<extra></extra>",
         )
     )
@@ -262,11 +283,13 @@ def create_tax_breakdown_chart(det_df, inputs, title_text):
     fig = go.Figure()
 
     for col in available_columns:
+        colour = VIVID_COLOURWAY[len(fig.data) % len(VIVID_COLOURWAY)]
         fig.add_trace(
             go.Bar(
                 x=det_df["financial_year_end"],
                 y=det_df[col],
                 name=pretty_names.get(col, col),
+                marker=dict(color=colour, line=dict(color="#FFFFFF", width=0.6)),
                 hovertemplate="Financial Year: %{x}FY<br>"
                 + f"{pretty_names.get(col, col)}: "
                 + "$%{y:,.0f}<extra></extra>",
@@ -311,12 +334,14 @@ def create_income_vs_spending_chart(det_df, inputs, title_text):
 
     for column, label in series:
         if column in det_df.columns:
+            colour = VIVID_COLOURWAY[len(fig.data) % len(VIVID_COLOURWAY)]
             fig.add_trace(
                 go.Scatter(
                     x=det_df["financial_year_end"],
                     y=det_df[column],
                     mode="lines",
                     name=label,
+                    line=dict(color=colour, width=3),
                     hovertemplate=f"Financial Year: %{{x}}FY<br>{label}: $%{{y:,.0f}}<extra></extra>",
                 )
             )
@@ -330,6 +355,84 @@ def create_income_vs_spending_chart(det_df, inputs, title_text):
         hovermode="x unified",
     )
 
+    return _format_currency_axis(fig, "y")
+
+
+def create_cashflow_chart(det_df, inputs, title_text):
+    years = det_df["financial_year_end"]
+
+    def values(column):
+        if column in det_df.columns:
+            return det_df[column].fillna(0.0).astype(float)
+        return years * 0.0
+
+    inflows = [
+        ("household_net_income", "Net Household Income", "家庭税后净收入", "#1F77B4"),
+        ("total_minimum_pension_drawdown", "Minimum Pension Drawdown", "最低退休金提取", "#2CA02C"),
+        ("non_super_withdrawal", "Non-Super Withdrawal", "非养老金资产提取", "#17BECF"),
+        ("total_extra_super_withdrawal", "Extra Super Withdrawal", "额外养老金提取", "#9467BD"),
+    ]
+    outflows = [
+        ("spending", "Household Spending", "家庭支出", "#D62728"),
+        ("total_cash_contributions", "Cash Contributions", "现金缴款", "#FF7F0E"),
+        ("non_super_tax_paid", "Non-Super Tax", "非养老金投资税", "#8C564B"),
+        ("total_super_withdrawal_cgt_tax", "Super Withdrawal CGT", "养老金提取资本利得税", "#E377C2"),
+    ]
+
+    fig = go.Figure()
+    total_inflow = values("household_net_income") * 0.0
+    total_outflow = values("household_net_income") * 0.0
+
+    for column, english_label, chinese_label, colour in inflows:
+        series_values = values(column).clip(lower=0.0)
+        total_inflow = total_inflow + series_values
+        if series_values.abs().sum() > 0.01:
+            label = _chart_text(inputs, english_label, chinese_label)
+            fig.add_trace(go.Bar(
+                x=years,
+                y=series_values,
+                name=label,
+                marker=dict(color=colour, line=dict(color="#FFFFFF", width=0.7)),
+                hovertemplate=f"{_chart_text(inputs, 'Financial Year', '财政年度')}: %{{x}}FY<br>{label}: $%{{y:,.0f}}<extra></extra>",
+            ))
+
+    for column, english_label, chinese_label, colour in outflows:
+        series_values = values(column).clip(lower=0.0)
+        total_outflow = total_outflow + series_values
+        if series_values.abs().sum() > 0.01:
+            label = _chart_text(inputs, english_label, chinese_label)
+            fig.add_trace(go.Bar(
+                x=years,
+                y=-series_values,
+                name=label,
+                marker=dict(color=colour, line=dict(color="#FFFFFF", width=0.7)),
+                hovertemplate=f"{_chart_text(inputs, 'Financial Year', '财政年度')}: %{{x}}FY<br>{label}: $%{{customdata:,.0f}}<extra></extra>",
+                customdata=series_values,
+            ))
+
+    net_cashflow = total_inflow - total_outflow
+    net_label = _chart_text(inputs, "Net Cash Flow", "净现金流")
+    fig.add_trace(go.Scatter(
+        x=years,
+        y=net_cashflow,
+        mode="lines+markers",
+        name=net_label,
+        line=dict(color="#111111", width=4),
+        marker=dict(color="#FFFFFF", line=dict(color="#111111", width=2), size=7),
+        hovertemplate=f"{_chart_text(inputs, 'Financial Year', '财政年度')}: %{{x}}FY<br>{net_label}: $%{{y:,.0f}}<extra></extra>",
+    ))
+
+    fig = _add_lifecycle_markers(fig, inputs)
+    fig.add_hline(y=0, line_color="#182A3A", line_width=1.2)
+    fig.update_layout(
+        title=title_text,
+        barmode="relative",
+        xaxis_title=_chart_text(inputs, "Financial Year", "财政年度"),
+        yaxis_title=_chart_text(inputs, "Annual Cash Flow", "年度现金流"),
+        hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.30, xanchor="left", x=0),
+        margin=dict(t=170),
+    )
     return _format_currency_axis(fig, "y")
 
 

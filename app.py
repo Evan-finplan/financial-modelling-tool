@@ -9,6 +9,7 @@ import plotly.express as px
 import streamlit as st
 
 from charts import (
+    create_cashflow_chart,
     create_deterministic_wealth_chart_comparison,
     create_failure_probability_chart,
     create_histogram,
@@ -65,8 +66,30 @@ def inject_jbwere_styles():
             --jbw-grid: #C7D6DE;
         }
 
-        html, body, [class*="st-"] {
+        html, body,
+        [data-testid="stAppViewContainer"],
+        [data-testid="stSidebar"] {
             font-family: Arial, "Microsoft YaHei", "PingFang SC", sans-serif;
+        }
+
+        /* Keep Streamlit's icon ligatures on their own font. Applying Arial to
+           every st-* class turns icon names into visible text and can make
+           uploader controls overlap. */
+        [data-testid="stIconMaterial"],
+        .material-symbols-rounded,
+        .material-symbols-outlined,
+        .material-icons {
+            font-family: "Material Symbols Rounded", "Material Symbols Outlined", "Material Icons" !important;
+            font-weight: normal !important;
+            font-style: normal !important;
+            letter-spacing: normal !important;
+            text-transform: none !important;
+            white-space: nowrap !important;
+            word-wrap: normal !important;
+            direction: ltr !important;
+            -webkit-font-feature-settings: "liga" !important;
+            -webkit-font-smoothing: antialiased !important;
+            font-feature-settings: "liga" !important;
         }
 
         p, li, label, input, textarea, button,
@@ -1130,30 +1153,42 @@ def render_assumption_details(df):
 
 
 def render_warning_sections(input_warnings_by_scenario, output_warnings_by_scenario, view_mode):
-    if view_mode == t("Adviser View", "顾问视图"):
-        for scenario_name, warnings_list in input_warnings_by_scenario.items():
-            if warnings_list:
-                st.subheader(f"Input Warnings - {scenario_name}")
-                for warning in warnings_list:
-                    st.warning(warning)
+    total_warning_count = sum(
+        len(warnings_list)
+        for warnings_list in list(input_warnings_by_scenario.values()) + list(output_warnings_by_scenario.values())
+    )
+    if total_warning_count == 0:
+        return
 
-        for scenario_name, warnings_list in output_warnings_by_scenario.items():
-            if warnings_list:
-                st.subheader(f"Result Warnings - {scenario_name}")
-                for warning in warnings_list:
-                    st.warning(warning)
-    else:
-        client_messages = []
+    expander_label = t(
+        f"Warnings and review notes ({total_warning_count})",
+        f"警告与审阅事项（{total_warning_count}）",
+    )
 
-        for warnings_list in input_warnings_by_scenario.values():
-            client_messages.extend(warnings_list)
+    with st.expander(expander_label, expanded=False):
+        if view_mode == t("Adviser View", "顾问视图"):
+            for scenario_name, warnings_list in input_warnings_by_scenario.items():
+                if warnings_list:
+                    st.subheader(t(f"Input Warnings - {scenario_name}", f"输入警告 - {scenario_name}"))
+                    for warning in warnings_list:
+                        st.warning(warning)
 
-        for warnings_list in output_warnings_by_scenario.values():
-            client_messages.extend(warnings_list)
+            for scenario_name, warnings_list in output_warnings_by_scenario.items():
+                if warnings_list:
+                    st.subheader(t(f"Result Warnings - {scenario_name}", f"结果警告 - {scenario_name}"))
+                    for warning in warnings_list:
+                        st.warning(warning)
+        else:
+            client_messages = []
 
-        if client_messages:
+            for warnings_list in input_warnings_by_scenario.values():
+                client_messages.extend(warnings_list)
+
+            for warnings_list in output_warnings_by_scenario.values():
+                client_messages.extend(warnings_list)
+
             st.subheader(t("Important Notes", "重要提示"))
-            for message in client_messages[:5]:
+            for message in client_messages:
                 st.warning(message)
 
 
@@ -3289,6 +3324,17 @@ if active_result_bundle is not None and workspace_mode == "View Results":
 
         elif adviser_result_section == t("Cashflow", "现金流"):
             st.subheader(t("Cashflow", "现金流"))
+            cashflow_fig = create_cashflow_chart(
+                display_det_df,
+                selected_result["inputs"],
+                t(f"Cash Flow - {selected_scenario}", f"现金流 - {selected_scenario}"),
+            )
+            st.plotly_chart(
+                cashflow_fig,
+                use_container_width=True,
+                key=chart_key("cashflow", selected_scenario, view_mode, "adviser_lazy"),
+            )
+
             adviser_cashflow_df = build_adviser_cashflow_df(display_det_df)
             st.subheader(t("Adviser Cashflow Summary", "顾问现金流摘要"))
             st.dataframe(adviser_cashflow_df, use_container_width=True)
@@ -3378,6 +3424,8 @@ if active_result_bundle is not None and workspace_mode == "View Results":
         col2.metric(t("Median Final Wealth", "最终财富中位数"), f"${selected_median_final_wealth:,.0f}")
         col3.metric(t("P10 Final Wealth", "P10 最终财富"), f"${selected_p10_final_wealth:,.0f}")
         col4.metric(t("P90 Final Wealth", "P90 最终财富"), f"${selected_p90_final_wealth:,.0f}")
+
+        render_warning_sections(input_warnings_by_scenario, output_warnings_by_scenario, view_mode)
 
         det_fig = create_deterministic_wealth_chart_comparison(det_single_compare_df, selected_result["inputs"])
         det_fig.update_layout(title=t("Deterministic Total Wealth Projection", "确定性总财富预测"), xaxis_title=t("Financial Year", "财政年度"), yaxis_title=t("Total Wealth", "总财富"))
