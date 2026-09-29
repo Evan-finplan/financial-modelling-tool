@@ -126,6 +126,16 @@ def _scenario_label(value, is_chinese):
     }.get(str(value), str(value))
 
 
+def _household_display_name(inputs, is_chinese):
+    names = [str(inputs.get("person1_name", "")).strip()]
+    if str(inputs.get("household_mode", "Two People")) == "Two People":
+        names.append(str(inputs.get("person2_name", "")).strip())
+    names = [name for name in names if name]
+    if not names:
+        return _text(is_chinese, "Private client", "私人客户")
+    return " & ".join(names) if not is_chinese else "、".join(names)
+
+
 def _localise_warning(value, is_chinese):
     value = str(value)
     if not is_chinese or any("\u4e00" <= character <= "\u9fff" for character in value):
@@ -501,6 +511,11 @@ def _styles(is_chinese):
 
     base = getSampleStyleSheet()
     return font_name, {
+        "cover_kicker": ParagraphStyle("PdfCoverKicker", parent=base["Normal"], fontName=font_name, fontSize=10, leading=13, textColor=JBW_BLUE, spaceAfter=8),
+        "cover_title": ParagraphStyle("PdfCoverTitle", parent=base["Title"], fontName=font_name, fontSize=30, leading=36, textColor=JBW_NAVY, alignment=TA_LEFT, spaceAfter=14),
+        "cover_name": ParagraphStyle("PdfCoverName", parent=base["Normal"], fontName=font_name, fontSize=18, leading=23, textColor=JBW_DEEP_NAVY, spaceAfter=4),
+        "cover_meta": ParagraphStyle("PdfCoverMeta", parent=base["BodyText"], fontName=font_name, fontSize=body_size, leading=18, textColor=JBW_INK, spaceAfter=2),
+        "cover_note": ParagraphStyle("PdfCoverNote", parent=base["BodyText"], fontName=font_name, fontSize=small_size, leading=14, textColor=JBW_MUTED, spaceAfter=0),
         "title": ParagraphStyle("PdfTitle", parent=base["Title"], fontName=font_name, fontSize=24, leading=29, textColor=JBW_NAVY, alignment=TA_LEFT, spaceAfter=9),
         "subtitle": ParagraphStyle("PdfSubtitle", parent=base["Normal"], fontName=font_name, fontSize=body_size, leading=17, textColor=JBW_MUTED, spaceAfter=13),
         "h1": ParagraphStyle("PdfH1", parent=base["Heading1"], fontName=font_name, fontSize=18, leading=22, textColor=JBW_NAVY, spaceBefore=9, spaceAfter=7),
@@ -557,19 +572,68 @@ def build_pdf_report_bytes(
     story = []
 
     report_title = str(inputs.get("report_title") or _text(is_chinese, "Financial Projection Report", "财务预测报告"))
-    title_style = styles["title"]
+    title_style = styles["cover_title"]
     if is_chinese and not any("\u4e00" <= character <= "\u9fff" for character in report_title):
         _, latin_styles = _styles(False)
-        title_style = latin_styles["title"]
-    story.append(Paragraph(escape(report_title), title_style))
+        title_style = latin_styles["cover_title"]
+
+    generated_at = datetime.now()
+    prepared_for = _household_display_name(inputs, is_chinese)
+    story.append(Spacer(1, 20 * mm))
     story.append(Paragraph(
-        escape(_text(
-            is_chinese,
-            f"Scenario: {selected_scenario} | Value basis: {value_mode} | Generated: {datetime.now().strftime('%d %B %Y')}",
-            f"情景：{_scenario_label(selected_scenario, True)} | 价值口径：{'现值' if value_mode == 'Present Value' else '终值'} | 生成日期：{datetime.now().strftime('%Y年%m月%d日')}",
-        )),
-        styles["subtitle"],
+        _text(is_chinese, "FINANCIAL MODELLING REPORT", "财务模型报告"),
+        styles["cover_kicker"],
     ))
+    story.append(Paragraph(escape(report_title), title_style))
+    story.append(Spacer(1, 7 * mm))
+    story.append(Paragraph(_text(is_chinese, "Prepared for", "为以下客户编制"), styles["cover_kicker"]))
+    story.append(Paragraph(escape(prepared_for), styles["cover_name"]))
+    story.append(Spacer(1, 10 * mm))
+
+    cover_details = [
+        (_text(is_chinese, "Scenario", "分析情景"), _scenario_label(selected_scenario, is_chinese)),
+        (_text(is_chinese, "Value basis", "价值口径"), _text(is_chinese, "Present Value", "现值") if value_mode == "Present Value" else _text(is_chinese, "Future Value", "终值")),
+        (_text(is_chinese, "Report date", "报告日期"), generated_at.strftime("%d %B %Y") if not is_chinese else generated_at.strftime("%Y年%m月%d日")),
+    ]
+    cover_rows = [
+        [
+            Paragraph(f"<b>{escape(label)}</b>", styles["cover_meta"]),
+            Paragraph(escape(str(value)), styles["cover_meta"]),
+        ]
+        for label, value in cover_details
+    ]
+    cover_table = Table(cover_rows, colWidths=[39 * mm, 121 * mm], rowHeights=[12 * mm] * len(cover_rows))
+    cover_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), JBW_MIST),
+        ("LINEBELOW", (0, 0), (-1, -2), 0.5, JBW_GRID),
+        ("BOX", (0, 0), (-1, -1), 0.6, JBW_GRID),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 8),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+    ]))
+    story.append(cover_table)
+    story.append(Spacer(1, 18 * mm))
+
+    confidentiality = Table([[Paragraph(
+        _text(
+            is_chinese,
+            "<b>PRIVATE &amp; CONFIDENTIAL</b><br/>Prepared for discussion with the named client. This document contains indicative modelling outcomes and should be read with the important notes in this report.",
+            "<b>私人及保密</b><br/>本报告仅供与上述客户讨论使用，其中包含示意性模型结果，并应结合报告中的重要说明一并阅读。",
+        ),
+        styles["cover_note"],
+    )]], colWidths=[160 * mm])
+    confidentiality.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), JBW_SKY),
+        ("BOX", (0, 0), (-1, -1), 0.7, JBW_TEAL),
+        ("LEFTPADDING", (0, 0), (-1, -1), 10),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+        ("TOPPADDING", (0, 0), (-1, -1), 9),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 9),
+    ]))
+    story.append(confidentiality)
+    story.append(PageBreak())
+
+    story.append(Paragraph(_text(is_chinese, "Executive summary", "执行摘要"), styles["title"]))
     story.append(Paragraph(
         _text(
             is_chinese,

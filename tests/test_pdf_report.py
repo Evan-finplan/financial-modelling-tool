@@ -93,6 +93,15 @@ class PdfReportTests(unittest.TestCase):
         self.assertEqual(styles["body"].fontSize, 12)
         self.assertIn(font_name, {"ArialReport", "Helvetica"})
 
+    def test_cover_uses_household_names_in_report_language(self):
+        two_people = {
+            **self.inputs,
+            "household_mode": "Two People",
+            "person2_name": "Taylor",
+        }
+        self.assertEqual(pdf_report._household_display_name(two_people, False), "Alex & Taylor")
+        self.assertEqual(pdf_report._household_display_name(two_people, True), "Alex、Taylor")
+
     def test_warning_text_is_localised_for_chinese_report(self):
         translated = pdf_report._localise_warning(
             "The deterministic projection realises capital gains on non-super withdrawals in at least one year.",
