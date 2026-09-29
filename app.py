@@ -9,7 +9,6 @@ import plotly.express as px
 import streamlit as st
 
 from charts import (
-    create_cashflow_chart,
     create_deterministic_wealth_chart_comparison,
     create_failure_probability_chart,
     create_histogram,
@@ -20,6 +19,14 @@ from charts import (
     create_tax_breakdown_chart,
     create_total_tax_paid_chart,
 )
+
+# Streamlit Cloud can briefly reload app.py before charts.py during a deploy.
+# Keep the app available during that window; the chart appears automatically
+# once the updated charts module is loaded on the next rerun.
+try:
+    from charts import create_cashflow_chart
+except ImportError:
+    create_cashflow_chart = None
 from model import (
     apply_preset_to_inputs,
     build_failure_probability_by_age,
@@ -3324,16 +3331,22 @@ if active_result_bundle is not None and workspace_mode == "View Results":
 
         elif adviser_result_section == t("Cashflow", "现金流"):
             st.subheader(t("Cashflow", "现金流"))
-            cashflow_fig = create_cashflow_chart(
-                display_det_df,
-                selected_result["inputs"],
-                t(f"Cash Flow - {selected_scenario}", f"现金流 - {selected_scenario}"),
-            )
-            st.plotly_chart(
-                cashflow_fig,
-                use_container_width=True,
-                key=chart_key("cashflow", selected_scenario, view_mode, "adviser_lazy"),
-            )
+            if create_cashflow_chart is None:
+                st.info(t(
+                    "The cash flow chart is temporarily unavailable while the app update completes. The cashflow tables remain available below.",
+                    "应用更新完成前，现金流图暂时不可用；下方现金流表格仍可正常查看。",
+                ))
+            else:
+                cashflow_fig = create_cashflow_chart(
+                    display_det_df,
+                    selected_result["inputs"],
+                    t(f"Cash Flow - {selected_scenario}", f"现金流 - {selected_scenario}"),
+                )
+                st.plotly_chart(
+                    cashflow_fig,
+                    use_container_width=True,
+                    key=chart_key("cashflow", selected_scenario, view_mode, "adviser_lazy"),
+                )
 
             adviser_cashflow_df = build_adviser_cashflow_df(display_det_df)
             st.subheader(t("Adviser Cashflow Summary", "顾问现金流摘要"))
