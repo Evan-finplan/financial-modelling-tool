@@ -1,6 +1,25 @@
 
 import plotly.express as px
 import plotly.graph_objects as go
+import plotly.io as pio
+
+
+JBWERE_COLOURWAY = ["#00205B", "#5B91A4", "#7AAFC0", "#334B5C", "#8AA0AE", "#4D7890"]
+
+pio.templates["jbwere"] = go.layout.Template(
+    layout=go.Layout(
+        colorway=JBWERE_COLOURWAY,
+        font=dict(family="Arial, sans-serif", size=12, color="#182A3A"),
+        title=dict(font=dict(family="Arial, sans-serif", size=18, color="#00205B")),
+        paper_bgcolor="#FFFFFF",
+        plot_bgcolor="#FFFFFF",
+        xaxis=dict(gridcolor="#DDE6EB", linecolor="#5B91A4", zerolinecolor="#C7D6DE"),
+        yaxis=dict(gridcolor="#DDE6EB", linecolor="#5B91A4", zerolinecolor="#C7D6DE"),
+        legend=dict(bgcolor="rgba(255,255,255,0.82)"),
+    )
+)
+pio.templates.default = "plotly_white+jbwere"
+px.defaults.color_discrete_sequence = JBWERE_COLOURWAY
 
 
 # ============================================================

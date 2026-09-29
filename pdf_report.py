@@ -1,6 +1,8 @@
 import io
 import math
+import re
 from datetime import datetime
+from pathlib import Path
 from xml.sax.saxutils import escape
 
 import numpy as np
@@ -13,6 +15,7 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import (
     CondPageBreak,
     PageBreak,
@@ -78,13 +81,23 @@ CHART_EXPLANATIONS = {
 }
 
 
+JBW_NAVY = colors.HexColor("#00205B")
+JBW_DEEP_NAVY = colors.HexColor("#00163F")
+JBW_BLUE = colors.HexColor("#34657F")
+JBW_TEAL = colors.HexColor("#5B91A4")
+JBW_SKY = colors.HexColor("#DDEEF4")
+JBW_MIST = colors.HexColor("#F4F8FA")
+JBW_INK = colors.HexColor("#182A3A")
+JBW_MUTED = colors.HexColor("#53697A")
+JBW_GRID = colors.HexColor("#C7D6DE")
+
 _PALETTE = [
-    colors.HexColor("#2563EB"),
-    colors.HexColor("#E11D48"),
-    colors.HexColor("#059669"),
-    colors.HexColor("#7C3AED"),
-    colors.HexColor("#D97706"),
-    colors.HexColor("#0891B2"),
+    JBW_NAVY,
+    JBW_TEAL,
+    colors.HexColor("#7AAFC0"),
+    colors.HexColor("#334B5C"),
+    colors.HexColor("#8AA0AE"),
+    colors.HexColor("#4D7890"),
 ]
 
 
@@ -93,8 +106,82 @@ def _is_chinese(inputs):
     return "中文" in language_value or "CN" in language_value.upper()
 
 
+def _language_is_chinese(language_value):
+    language_value = str(language_value or "")
+    return "中文" in language_value or "CN" in language_value.upper() or language_value.lower().startswith("zh")
+
+
 def _text(is_chinese, en, zh):
     return zh if is_chinese else en
+
+
+def _scenario_label(value, is_chinese):
+    if not is_chinese:
+        return str(value)
+    return {
+        "Base Case": "基础情景",
+        "Conservative": "保守情景",
+        "Optimistic": "乐观情景",
+        "Custom": "自定义情景",
+    }.get(str(value), str(value))
+
+
+def _localise_warning(value, is_chinese):
+    value = str(value)
+    if not is_chinese or any("\u4e00" <= character <= "\u9fff" for character in value):
+        return value
+    translations = {
+        "Residential rental losses are quarantined from 2027-28 under the modelled legislated rule and carried forward against future residential income.": "根据模型采用的已立法规则，住宅出租亏损自 2027-28 财年起被隔离，并结转以抵减未来住宅收入。",
+        "Residential property modelling is an aggregate, interest-only projection. Property equity is included in net wealth but is not sold or refinanced to fund spending; principal repayments, depreciation schedules, sale costs, and property CGT are not modelled.": "住宅物业采用汇总且仅计利息的预测。物业净值计入净财富，但不会通过出售或再融资来支付支出；本金偿还、折旧明细、出售成本及物业 CGT 均未建模。",
+        "The discretionary trust 30% minimum tax is based on the September 2026 exposure draft and is not enacted law. Final legislation may change the result.": "全权信托 30% 最低税基于 2026 年 9 月的征求意见稿，尚未成为正式法律；最终立法可能改变结果。",
+        "The enacted CGT reform is modelled using one homogeneous non-super pool. The 1 July 2027 transition allocation, annual CPI indexation, loss ordering, and partial disposals are planning estimates and must be reconciled to asset-level records for tax return work.": "已立法的 CGT 改革以单一同质的非养老金资产池建模。2027 年 7 月 1 日的过渡分配、年度 CPI 指数化、亏损抵减顺序及部分出售均为规划估算，报税时必须与单项资产记录核对。",
+        "The selected new/affordable housing CGT method is a scenario choice. Confirm statutory eligibility and compare the 50% discount with indexation using actual records at disposal.": "所选新建／可负担住房 CGT 方法属于情景选择。出售时应确认法定资格，并依据实际记录比较 50% 折扣法与指数化方法。",
+        "Person 1 is scheduled to retire within 5 years. Small assumption changes may have a larger impact.": "人物 1 计划在 5 年内退休，较小的假设变化也可能产生较大影响。",
+        "Person 2 is scheduled to retire within 5 years. Small assumption changes may have a larger impact.": "人物 2 计划在 5 年内退休，较小的假设变化也可能产生较大影响。",
+        "At least one retirement age is relatively early. This may increase portfolio sustainability risk.": "至少一人的退休年龄相对较早，可能增加投资组合的可持续性风险。",
+        "Super Capital Return Std is relatively high. This may produce a wide range of outcomes.": "养老金资本回报波动率相对较高，可能导致结果区间较宽。",
+        "Non-Super Capital Return Std is relatively high. This may produce a wide range of outcomes.": "非养老金资本回报波动率相对较高，可能导致结果区间较宽。",
+        "Number of Simulations is relatively low. Results may be less stable.": "模拟次数相对较少，结果可能不够稳定。",
+        "Non-super withdrawals use a pooled average-cost method; individual tax parcels and exact disposal ordering are not modelled.": "非养老金资产提取采用汇总平均成本法；模型未处理单项税务批次及精确出售顺序。",
+        "Salary income is indexed annually using the inflation rate while the person remains in working phase.": "人物处于工作阶段时，工资收入按通胀率逐年调整。",
+        "Pension transfer is triggered from pension start age and is applied up to the person's transfer balance cap. Minimum pension drawdown is then applied from pension assets.": "达到养老金开始年龄后触发转入养老金阶段，并以个人 Transfer Balance Cap 为上限；随后从养老金资产中执行最低提取。",
+        "Personal deductible contributions reduce taxable income and also flow through concessional contribution tax inside super.": "个人可扣税缴款会降低应税收入，同时在养老金账户内适用优惠缴款税。",
+        "Non-super cost base is lower than market value, so future withdrawals may crystallise capital gains.": "非养老金资产成本基础低于市场价值，因此未来提取可能实现资本利得。",
+        "CGT discount rate has been changed from the default 50% assumption. Confirm this is intended.": "CGT 折扣率已偏离默认的 50% 假设，请确认该设置符合预期。",
+        "Success Rate is below 50%. The plan may have a high risk of failure.": "成功率低于 50%，该方案可能存在较高失败风险。",
+        "Success Rate is below 75%. The plan may require further review or stress testing.": "成功率低于 75%，该方案可能需要进一步审阅或压力测试。",
+        "P10 Final Wealth is below zero. Downside outcomes may be severe.": "P10 最终财富低于零，下行情景可能较为严重。",
+        "Median Final Wealth is below zero. The central case may not be sustainable.": "最终财富中位数低于零，中位情景可能不可持续。",
+        "The deterministic projection shows unmet shortfall in at least one year.": "确定性预测显示至少有一个年度出现未满足的资金缺口。",
+        "Failure probability rises sharply at some point in the projection. Review sequencing and spending assumptions.": "预测期间某一阶段的失败概率明显上升，请审阅回报顺序风险及支出假设。",
+        "The deterministic projection realises capital gains on non-super withdrawals in at least one year.": "确定性预测显示至少有一个年度的非养老金资产提取实现了资本利得。",
+        "Non-super cost base falls materially below market value in the projection, which may increase future CGT on withdrawals.": "预测中的非养老金成本基础明显低于市场价值，可能提高未来提取时的 CGT。",
+        "Division 293 tax is an estimate based on income components available in this model. Confirm reportable fringe benefits, net investment or rental losses, defined benefit contributions, and the final ATO assessment before relying on it for advice.": "Division 293 税额基于模型可用收入项目估算。用于建议前，应确认应申报附加福利、净投资或出租亏损、固定福利缴款及 ATO 最终评税结果。",
+    }
+    if value in translations:
+        return translations[value]
+    if value.startswith("Published indexed super thresholds are currently configured through "):
+        year_match = re.search(r"through\s+(\d+)FY", value)
+        year = year_match.group(1) if year_match else "最新公布年度"
+        return f"目前已公布的指数化养老金门槛仅配置至 {year}FY。后续预测年度继续采用最新已知的缴款上限、一般 Transfer Balance Cap 及 SG 最高收入基础，直至政策设置更新。"
+    failure_match = re.match(r"Cumulative failure probability reaches 25% by (\d+)FY\.", value)
+    if failure_match:
+        return f"累计失败概率在 {failure_match.group(1)}FY 前达到 25%。"
+    contribution_match = re.match(r"(Person [12]) in (\d+)FY: (.+)", value)
+    if contribution_match:
+        person = "人物 1" if contribution_match.group(1) == "Person 1" else "人物 2"
+        detail = contribution_match.group(3)
+        if "estimated concessional contributions exceed the annual cap" in detail:
+            return f"{person} 在 {contribution_match.group(2)}FY 的预计优惠缴款超过年度上限，请审阅结转未使用优惠缴款额度的适用资格。"
+        if "personal deductible contribution entered at age 67 or above" in detail:
+            return f"{person} 在 {contribution_match.group(2)}FY 于 67 岁或以上录入个人可扣税缴款，请审阅相关资格及工作测试要求。"
+        if "personal deductible contribution entered at age 75 or above" in detail:
+            return f"{person} 在 {contribution_match.group(2)}FY 于 75 岁或以上录入个人可扣税缴款，请仔细审阅接收及资格规则。"
+        if "non-concessional contributions exceed the annual cap" in detail:
+            return f"{person} 在 {contribution_match.group(2)}FY 的非优惠缴款超过年度上限，请审阅提前使用未来年度额度的适用资格。"
+        if "non-concessional contribution entered at age 75 or above" in detail:
+            return f"{person} 在 {contribution_match.group(2)}FY 于 75 岁或以上录入非优惠缴款，请仔细审阅接收及资格规则。"
+    return "模型检测到一项需要进一步审阅的事项，请在 APP 中核对相关输入、假设及输出。"
 
 
 def _safe_number(value, default=0.0):
@@ -238,21 +325,21 @@ def _line_chart(x_values, series, font_name, percent_axis=False, width=175 * mm,
     if y_min < 0:
         y_min -= padding
 
-    drawing.add(Line(left, bottom, left, bottom + plot_height, strokeColor=colors.HexColor("#64748B"), strokeWidth=0.8))
-    drawing.add(Line(left, bottom, left + plot_width, bottom, strokeColor=colors.HexColor("#64748B"), strokeWidth=0.8))
+    drawing.add(Line(left, bottom, left, bottom + plot_height, strokeColor=JBW_BLUE, strokeWidth=0.8))
+    drawing.add(Line(left, bottom, left + plot_width, bottom, strokeColor=JBW_BLUE, strokeWidth=0.8))
 
     for tick in range(5):
         ratio = tick / 4
         y = bottom + plot_height * ratio
         value = y_min + (y_max - y_min) * ratio
-        drawing.add(Line(left, y, left + plot_width, y, strokeColor=colors.HexColor("#E2E8F0"), strokeWidth=0.5))
+        drawing.add(Line(left, y, left + plot_width, y, strokeColor=JBW_GRID, strokeWidth=0.5))
         label = f"{value:.0%}" if percent_axis else _money(value)
-        drawing.add(String(left - 2 * mm, y - 2, label, textAnchor="end", fontName=font_name, fontSize=7, fillColor=colors.HexColor("#475569")))
+        drawing.add(String(left - 2 * mm, y - 2, label, textAnchor="end", fontName=font_name, fontSize=8, fillColor=JBW_MUTED))
 
     tick_indexes = sorted(set([0, len(x_values) // 4, len(x_values) // 2, 3 * len(x_values) // 4, len(x_values) - 1]))
     for index in tick_indexes:
         x = left + plot_width * (index / max(len(x_values) - 1, 1))
-        drawing.add(String(x, bottom - 5 * mm, str(x_values[index]), textAnchor="middle", fontName=font_name, fontSize=7, fillColor=colors.HexColor("#475569")))
+        drawing.add(String(x, bottom - 5 * mm, str(x_values[index]), textAnchor="middle", fontName=font_name, fontSize=8, fillColor=JBW_MUTED))
 
     for series_index, (label, raw_values, colour) in enumerate(series):
         values = _normalise_series(raw_values)
@@ -266,7 +353,7 @@ def _line_chart(x_values, series, font_name, percent_axis=False, width=175 * mm,
         legend_x = left + (series_index % 3) * (plot_width / 3)
         legend_y = height - 3 * mm - (series_index // 3) * 4 * mm
         drawing.add(Line(legend_x, legend_y, legend_x + 5 * mm, legend_y, strokeColor=colour, strokeWidth=2))
-        drawing.add(String(legend_x + 6 * mm, legend_y - 2, str(label), fontName=font_name, fontSize=7, fillColor=colors.HexColor("#334155")))
+        drawing.add(String(legend_x + 6 * mm, legend_y - 2, str(label), fontName=font_name, fontSize=8, fillColor=JBW_INK))
     return drawing
 
 
@@ -281,20 +368,20 @@ def _histogram_chart(values, font_name, width=175 * mm, height=76 * mm):
     counts, edges = np.histogram(values, bins=min(20, max(8, int(math.sqrt(values.size)))))
     maximum = max(int(counts.max()), 1)
     bar_width = plot_width / max(len(counts), 1)
-    drawing.add(Line(left, bottom, left, bottom + plot_height, strokeColor=colors.HexColor("#64748B"), strokeWidth=0.8))
-    drawing.add(Line(left, bottom, left + plot_width, bottom, strokeColor=colors.HexColor("#64748B"), strokeWidth=0.8))
+    drawing.add(Line(left, bottom, left, bottom + plot_height, strokeColor=JBW_BLUE, strokeWidth=0.8))
+    drawing.add(Line(left, bottom, left + plot_width, bottom, strokeColor=JBW_BLUE, strokeWidth=0.8))
     for index, count in enumerate(counts):
         height_value = plot_height * count / maximum
-        drawing.add(Rect(left + index * bar_width + 0.5, bottom, max(bar_width - 1, 1), height_value, fillColor=colors.HexColor("#60A5FA"), strokeColor=None))
+        drawing.add(Rect(left + index * bar_width + 0.5, bottom, max(bar_width - 1, 1), height_value, fillColor=JBW_TEAL, strokeColor=None))
     for ratio in [0, 0.5, 1]:
         value = edges[0] + (edges[-1] - edges[0]) * ratio
         x = left + plot_width * ratio
-        drawing.add(String(x, bottom - 5 * mm, _money(value), textAnchor="middle", fontName=font_name, fontSize=7, fillColor=colors.HexColor("#475569")))
+        drawing.add(String(x, bottom - 5 * mm, _money(value), textAnchor="middle", fontName=font_name, fontSize=8, fillColor=JBW_MUTED))
     median = float(np.median(values))
     if edges[-1] > edges[0]:
         median_x = left + plot_width * (median - edges[0]) / (edges[-1] - edges[0])
-        drawing.add(Line(median_x, bottom, median_x, bottom + plot_height, strokeColor=colors.HexColor("#E11D48"), strokeWidth=1.5))
-        drawing.add(String(median_x, bottom + plot_height + 2, "P50", textAnchor="middle", fontName=font_name, fontSize=7, fillColor=colors.HexColor("#E11D48")))
+        drawing.add(Line(median_x, bottom, median_x, bottom + plot_height, strokeColor=JBW_NAVY, strokeWidth=1.5))
+        drawing.add(String(median_x, bottom + plot_height + 2, "P50", textAnchor="middle", fontName=font_name, fontSize=8, fillColor=JBW_NAVY))
     return drawing
 
 
@@ -338,7 +425,7 @@ def _chart_flowable(chart_key, selected_result, comparison_results, selected_sce
     if chart_key == "wealth_projection":
         series = []
         for index, (scenario, result) in enumerate(comparison_results.items()):
-            series.append((scenario, result["det_df"]["total_wealth"].tolist(), _PALETTE[index % len(_PALETTE)]))
+            series.append((_scenario_label(scenario, is_chinese), result["det_df"]["total_wealth"].tolist(), _PALETTE[index % len(_PALETTE)]))
         drawing = _line_chart(years, series, font_name)
     elif chart_key == "income_spending":
         series = []
@@ -371,6 +458,33 @@ def _chart_flowable(chart_key, selected_result, comparison_results, selected_sce
     return label, drawing, explanation
 
 
+def _register_arial_compatible_font():
+    font_candidates = [
+        (Path("C:/Windows/Fonts/arial.ttf"), Path("C:/Windows/Fonts/arialbd.ttf")),
+        (Path("/usr/share/fonts/truetype/msttcorefonts/Arial.ttf"), Path("/usr/share/fonts/truetype/msttcorefonts/Arial_Bold.ttf")),
+        (Path("/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf"), Path("/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf")),
+        (Path("/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"), Path("/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf")),
+    ]
+    for regular_path, bold_path in font_candidates:
+        if not regular_path.exists():
+            continue
+        try:
+            pdfmetrics.registerFont(TTFont("ArialReport", str(regular_path)))
+            if bold_path.exists():
+                pdfmetrics.registerFont(TTFont("ArialReport-Bold", str(bold_path)))
+                pdfmetrics.registerFontFamily(
+                    "ArialReport",
+                    normal="ArialReport",
+                    bold="ArialReport-Bold",
+                    italic="ArialReport",
+                    boldItalic="ArialReport-Bold",
+                )
+            return "ArialReport"
+        except Exception:
+            continue
+    return "Helvetica"
+
+
 def _styles(is_chinese):
     if is_chinese:
         try:
@@ -378,28 +492,35 @@ def _styles(is_chinese):
             font_name = "STSong-Light"
         except Exception:
             font_name = "Helvetica"
+        body_size = 11.0
+        small_size = 9.5
     else:
-        font_name = "Helvetica"
+        font_name = _register_arial_compatible_font()
+        body_size = 12.0
+        small_size = 10.0
 
     base = getSampleStyleSheet()
     return font_name, {
-        "title": ParagraphStyle("PdfTitle", parent=base["Title"], fontName=font_name, fontSize=23, leading=29, textColor=colors.HexColor("#0F172A"), alignment=TA_LEFT, spaceAfter=8),
-        "subtitle": ParagraphStyle("PdfSubtitle", parent=base["Normal"], fontName=font_name, fontSize=10, leading=15, textColor=colors.HexColor("#475569"), spaceAfter=12),
-        "h1": ParagraphStyle("PdfH1", parent=base["Heading1"], fontName=font_name, fontSize=16, leading=20, textColor=colors.HexColor("#0F3D64"), spaceBefore=8, spaceAfter=7),
-        "h2": ParagraphStyle("PdfH2", parent=base["Heading2"], fontName=font_name, fontSize=12, leading=16, textColor=colors.HexColor("#1E3A5F"), spaceBefore=5, spaceAfter=5),
-        "body": ParagraphStyle("PdfBody", parent=base["BodyText"], fontName=font_name, fontSize=9.2, leading=14, textColor=colors.HexColor("#334155"), spaceAfter=7),
-        "small": ParagraphStyle("PdfSmall", parent=base["BodyText"], fontName=font_name, fontSize=7.5, leading=10, textColor=colors.HexColor("#64748B"), spaceAfter=4),
-        "metric": ParagraphStyle("PdfMetric", parent=base["BodyText"], fontName=font_name, fontSize=10, leading=13, alignment=TA_CENTER, textColor=colors.HexColor("#0F172A")),
+        "title": ParagraphStyle("PdfTitle", parent=base["Title"], fontName=font_name, fontSize=24, leading=29, textColor=JBW_NAVY, alignment=TA_LEFT, spaceAfter=9),
+        "subtitle": ParagraphStyle("PdfSubtitle", parent=base["Normal"], fontName=font_name, fontSize=body_size, leading=17, textColor=JBW_MUTED, spaceAfter=13),
+        "h1": ParagraphStyle("PdfH1", parent=base["Heading1"], fontName=font_name, fontSize=18, leading=22, textColor=JBW_NAVY, spaceBefore=9, spaceAfter=7),
+        "h2": ParagraphStyle("PdfH2", parent=base["Heading2"], fontName=font_name, fontSize=14, leading=18, textColor=JBW_DEEP_NAVY, spaceBefore=6, spaceAfter=5),
+        "body": ParagraphStyle("PdfBody", parent=base["BodyText"], fontName=font_name, fontSize=body_size, leading=17, textColor=JBW_INK, spaceAfter=8),
+        "small": ParagraphStyle("PdfSmall", parent=base["BodyText"], fontName=font_name, fontSize=small_size, leading=13, textColor=JBW_MUTED, spaceAfter=4),
+        "table_header": ParagraphStyle("PdfTableHeader", parent=base["BodyText"], fontName=font_name, fontSize=small_size, leading=13, textColor=colors.white, spaceAfter=0),
+        "metric": ParagraphStyle("PdfMetric", parent=base["BodyText"], fontName=font_name, fontSize=12, leading=15, alignment=TA_CENTER, textColor=JBW_DEEP_NAVY),
     }
 
 
 def _footer(canvas, doc, font_name, is_chinese):
     canvas.saveState()
-    canvas.setStrokeColor(colors.HexColor("#CBD5E1"))
+    canvas.setFillColor(JBW_NAVY)
+    canvas.rect(0, A4[1] - 5 * mm, A4[0], 5 * mm, fill=1, stroke=0)
+    canvas.setStrokeColor(JBW_GRID)
     canvas.setLineWidth(0.5)
     canvas.line(18 * mm, 14 * mm, A4[0] - 18 * mm, 14 * mm)
-    canvas.setFont(font_name, 7)
-    canvas.setFillColor(colors.HexColor("#64748B"))
+    canvas.setFont(font_name, 8)
+    canvas.setFillColor(JBW_MUTED)
     canvas.drawString(18 * mm, 9 * mm, _text(is_chinese, "Financial modelling report - indicative only", "财务模型报告 - 仅供参考"))
     canvas.drawRightString(A4[0] - 18 * mm, 9 * mm, f"{doc.page}")
     canvas.restoreState()
@@ -413,12 +534,13 @@ def build_pdf_report_bytes(
     value_mode="Future Value",
     input_warnings=None,
     output_warnings=None,
+    report_language=None,
 ):
     selected_chart_keys = [key for key in selected_chart_keys if key in PDF_CHART_KEYS]
     inputs = selected_result["inputs"]
     det_df = selected_result["det_df"]
     summary_df = selected_result["summary_df"]
-    is_chinese = _is_chinese(inputs)
+    is_chinese = _language_is_chinese(report_language) if report_language is not None else _is_chinese(inputs)
     font_name, styles = _styles(is_chinese)
 
     output = io.BytesIO()
@@ -427,7 +549,7 @@ def build_pdf_report_bytes(
         pagesize=A4,
         rightMargin=18 * mm,
         leftMargin=18 * mm,
-        topMargin=17 * mm,
+        topMargin=20 * mm,
         bottomMargin=19 * mm,
         title=str(inputs.get("report_title") or _text(is_chinese, "Financial Projection Report", "财务预测报告")),
         author="Retirement Modelling Suite (Australia)",
@@ -435,12 +557,16 @@ def build_pdf_report_bytes(
     story = []
 
     report_title = str(inputs.get("report_title") or _text(is_chinese, "Financial Projection Report", "财务预测报告"))
-    story.append(Paragraph(escape(report_title), styles["title"]))
+    title_style = styles["title"]
+    if is_chinese and not any("\u4e00" <= character <= "\u9fff" for character in report_title):
+        _, latin_styles = _styles(False)
+        title_style = latin_styles["title"]
+    story.append(Paragraph(escape(report_title), title_style))
     story.append(Paragraph(
         escape(_text(
             is_chinese,
             f"Scenario: {selected_scenario} | Value basis: {value_mode} | Generated: {datetime.now().strftime('%d %B %Y')}",
-            f"情景：{selected_scenario} | 价值口径：{'现值' if value_mode == 'Present Value' else '终值'} | 生成日期：{datetime.now().strftime('%Y年%m月%d日')}",
+            f"情景：{_scenario_label(selected_scenario, True)} | 价值口径：{'现值' if value_mode == 'Present Value' else '终值'} | 生成日期：{datetime.now().strftime('%Y年%m月%d日')}",
         )),
         styles["subtitle"],
     ))
@@ -474,11 +600,11 @@ def build_pdf_report_bytes(
             Paragraph(f"<b>{_money(end_wealth)}</b>", styles["metric"]),
         ],
     ]
-    metric_table = Table(metric_data, colWidths=[43 * mm] * 4, rowHeights=[9 * mm, 11 * mm])
+    metric_table = Table(metric_data, colWidths=[43 * mm] * 4, rowHeights=[11 * mm, 13 * mm])
     metric_table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F1F5F9")),
-        ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
-        ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
+        ("BACKGROUND", (0, 0), (-1, -1), JBW_SKY),
+        ("BOX", (0, 0), (-1, -1), 0.5, JBW_GRID),
+        ("INNERGRID", (0, 0), (-1, -1), 0.5, JBW_GRID),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ("LEFTPADDING", (0, 0), (-1, -1), 4),
         ("RIGHTPADDING", (0, 0), (-1, -1), 4),
@@ -511,10 +637,10 @@ def build_pdf_report_bytes(
     story.append(Paragraph(_text(is_chinese, "Key milestones", "关键节点"), styles["h1"]))
     milestones = build_key_milestones(det_df, inputs, is_chinese=is_chinese)
     milestone_rows = [[
-        Paragraph(_text(is_chinese, "Event", "事件"), styles["small"]),
-        Paragraph(_text(is_chinese, "FY", "财年"), styles["small"]),
-        Paragraph(_text(is_chinese, "Total wealth", "总财富"), styles["small"]),
-        Paragraph(_text(is_chinese, "Interpretation", "说明"), styles["small"]),
+        Paragraph(_text(is_chinese, "Event", "事件"), styles["table_header"]),
+        Paragraph(_text(is_chinese, "FY", "财年"), styles["table_header"]),
+        Paragraph(_text(is_chinese, "Total wealth", "总财富"), styles["table_header"]),
+        Paragraph(_text(is_chinese, "Interpretation", "说明"), styles["table_header"]),
     ]]
     for item in milestones:
         milestone_rows.append([
@@ -525,10 +651,10 @@ def build_pdf_report_bytes(
         ])
     milestone_table = Table(milestone_rows, colWidths=[43 * mm, 18 * mm, 30 * mm, 81 * mm], repeatRows=1)
     milestone_table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0F3D64")),
+        ("BACKGROUND", (0, 0), (-1, 0), JBW_NAVY),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-        ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#CBD5E1")),
-        ("BACKGROUND", (0, 1), (-1, -1), colors.HexColor("#F8FAFC")),
+        ("GRID", (0, 0), (-1, -1), 0.4, JBW_GRID),
+        ("BACKGROUND", (0, 1), (-1, -1), JBW_MIST),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("LEFTPADDING", (0, 0), (-1, -1), 4),
         ("RIGHTPADDING", (0, 0), (-1, -1), 4),
@@ -541,14 +667,14 @@ def build_pdf_report_bytes(
     if combined_warnings:
         story.append(Paragraph(_text(is_chinese, "Items requiring review", "需要审阅的事项"), styles["h1"]))
         for warning in combined_warnings[:8]:
-            story.append(Paragraph(f"- {escape(str(warning))}", styles["body"]))
+            story.append(Paragraph(f"- {escape(_localise_warning(warning, is_chinese))}", styles["body"]))
 
     if selected_chart_keys:
         story.append(PageBreak())
         story.append(Paragraph(_text(is_chinese, "Selected charts and interpretation", "所选图表及解释"), styles["h1"]))
         for index, chart_key in enumerate(selected_chart_keys):
             if index > 0:
-                story.append(CondPageBreak(95 * mm))
+                story.append(PageBreak())
             label, drawing, explanation = _chart_flowable(
                 chart_key,
                 selected_result,

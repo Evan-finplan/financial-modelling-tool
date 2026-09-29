@@ -1,7 +1,9 @@
 import unittest
+from unittest.mock import patch
 
 import pandas as pd
 
+import pdf_report
 from pdf_report import PDF_CHART_KEYS, build_key_milestones, build_pdf_report_bytes
 
 
@@ -72,15 +74,32 @@ class PdfReportTests(unittest.TestCase):
         self.assertGreater(len(pdf_bytes), 10_000)
 
     def test_pdf_report_supports_chinese_text(self):
-        chinese_result = {**self.result, "inputs": {**self.inputs, "ui_language": "🇨🇳 中文", "report_title": "退休财务预测"}}
-        pdf_bytes = build_pdf_report_bytes(
-            selected_result=chinese_result,
-            comparison_results={"基础情景": chinese_result},
-            selected_scenario="基础情景",
-            selected_chart_keys=["wealth_projection"],
-        )
+        result_with_old_english_language = {**self.result, "inputs": {**self.inputs, "ui_language": "🇬🇧 English", "report_title": "退休财务预测"}}
+        with patch("pdf_report._styles", wraps=pdf_report._styles) as style_spy:
+            pdf_bytes = build_pdf_report_bytes(
+                selected_result=result_with_old_english_language,
+                comparison_results={"Base Case": result_with_old_english_language},
+                selected_scenario="Base Case",
+                selected_chart_keys=["wealth_projection"],
+                input_warnings=["Non-super cost base is lower than market value, so future withdrawals may crystallise capital gains."],
+                report_language="🇨🇳 中文",
+            )
+            style_spy.assert_called_once_with(True)
         self.assertTrue(pdf_bytes.startswith(b"%PDF"))
         self.assertGreater(len(pdf_bytes), 5_000)
+
+    def test_english_report_body_uses_12_point_arial_family(self):
+        font_name, styles = pdf_report._styles(False)
+        self.assertEqual(styles["body"].fontSize, 12)
+        self.assertIn(font_name, {"ArialReport", "Helvetica"})
+
+    def test_warning_text_is_localised_for_chinese_report(self):
+        translated = pdf_report._localise_warning(
+            "The deterministic projection realises capital gains on non-super withdrawals in at least one year.",
+            True,
+        )
+        self.assertIn("确定性预测", translated)
+        self.assertNotIn("deterministic projection", translated)
 
 
 if __name__ == "__main__":

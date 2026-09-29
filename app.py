@@ -50,6 +50,107 @@ def t(en, zh):
     return zh if is_cn() else en
 
 
+def inject_jbwere_styles():
+    st.markdown(
+        """
+        <style>
+        :root {
+            --jbw-navy: #00205B;
+            --jbw-deep-navy: #00163F;
+            --jbw-blue: #34657F;
+            --jbw-sky: #DDEEF4;
+            --jbw-mist: #F4F8FA;
+            --jbw-ink: #182A3A;
+            --jbw-muted: #53697A;
+            --jbw-grid: #C7D6DE;
+        }
+
+        html, body, [class*="st-"] {
+            font-family: Arial, "Microsoft YaHei", "PingFang SC", sans-serif;
+        }
+
+        p, li, label, input, textarea, button,
+        [data-testid="stCaptionContainer"],
+        [data-testid="stMarkdownContainer"] {
+            font-size: 12px;
+        }
+
+        [data-testid="stAppViewContainer"] {
+            background: #FFFFFF;
+            color: var(--jbw-ink);
+            border-top: 7px solid var(--jbw-navy);
+        }
+
+        [data-testid="stSidebar"] {
+            background: var(--jbw-mist);
+            border-right: 1px solid var(--jbw-grid);
+        }
+
+        h1, h2, h3, h4, h5, h6 {
+            color: var(--jbw-navy) !important;
+            font-family: Arial, "Microsoft YaHei", "PingFang SC", sans-serif !important;
+            font-weight: 600 !important;
+            letter-spacing: -0.01em;
+        }
+
+        h1 {
+            border-bottom: 1px solid var(--jbw-grid);
+            padding-bottom: 0.35rem;
+        }
+
+        [data-testid="stMetric"] {
+            background: var(--jbw-sky);
+            border-top: 3px solid var(--jbw-navy);
+            padding: 0.85rem 1rem;
+        }
+
+        [data-testid="stMetricLabel"], [data-testid="stMetricValue"] {
+            color: var(--jbw-deep-navy);
+        }
+
+        .stButton > button,
+        .stDownloadButton > button {
+            background: var(--jbw-navy);
+            color: #FFFFFF !important;
+            border: 1px solid var(--jbw-navy);
+            border-radius: 2px;
+            min-height: 2.6rem;
+        }
+
+        .stButton > button:hover,
+        .stDownloadButton > button:hover {
+            background: var(--jbw-deep-navy);
+            border-color: var(--jbw-deep-navy);
+            color: #FFFFFF !important;
+        }
+
+        [data-testid="stExpander"],
+        [data-testid="stForm"],
+        [data-testid="stVerticalBlockBorderWrapper"] {
+            border-color: var(--jbw-grid) !important;
+            border-radius: 2px !important;
+        }
+
+        [data-testid="stAlert"] {
+            border-radius: 2px;
+            border-left: 4px solid var(--jbw-blue);
+        }
+
+        div[data-baseweb="select"] > div,
+        div[data-baseweb="input"] > div,
+        textarea {
+            border-radius: 2px !important;
+        }
+
+        a {
+            color: var(--jbw-blue);
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 
 # ============================================================
 # SECTION: FILE EXPORT HELPERS
@@ -139,6 +240,7 @@ def render_pdf_export_controls(
             value_mode=value_mode,
             input_warnings=input_warnings,
             output_warnings=output_warnings,
+            report_language=LANGUAGE_CN if is_cn() else LANGUAGE_EN,
         )
     except Exception as exc:
         st.error(t(
@@ -1474,6 +1576,7 @@ def build_adviser_debug_df(det_df, inputs):
 # ============================================================
 
 st.set_page_config(page_title="Retirement Modelling Suite (AU)", page_icon="📊", layout="wide")
+inject_jbwere_styles()
 
 if "ui_language" not in st.session_state:
     st.session_state.ui_language = LANGUAGE_EN
