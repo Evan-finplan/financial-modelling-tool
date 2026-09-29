@@ -20,6 +20,7 @@ A Streamlit-based financial modelling tool for analysing retirement outcomes und
 - CGT modelling (super and non-super assets)
 - Adviser View / Client View
 - Excel export (inputs, assumptions, debug tables)
+- One-click PDF report export with selectable charts, future outlook, milestone commentary, and chart explanations
 - Editable assumption presets
 - Bilingual interface (English / 中文)
 

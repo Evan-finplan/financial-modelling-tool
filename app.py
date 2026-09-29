@@ -31,6 +31,7 @@ from model import (
     run_monte_carlo,
     validate_inputs,
 )
+from pdf_report import CHART_LABELS, PDF_CHART_KEYS, build_pdf_report_bytes
 
 
 # ============================================================
@@ -85,6 +86,80 @@ def build_export_filename(report_title, base_name, scenario_name, extension):
     scenario_part = sanitise_filename_part(scenario_name, fallback="Scenario")
     date_part = datetime.now().strftime("%d-%m-%Y")
     return f"{title_part}_{base_part}_{scenario_part}_{date_part}.{extension}"
+
+
+def render_pdf_export_controls(
+    selected_result,
+    comparison_results,
+    selected_scenario,
+    value_mode,
+    input_warnings,
+    output_warnings,
+    widget_scope,
+):
+    st.subheader(t("PDF Report", "PDF 报告"))
+    st.caption(t(
+        "Tick the charts to include. The report always includes a future outlook, key milestones, headline results, review items and explanatory notes.",
+        "请勾选需要导出的图表。报告始终包含未来情况概述、关键节点、核心结果、审阅事项及相关解释。",
+    ))
+
+    default_charts = {
+        "wealth_projection",
+        "percentile_paths",
+        "failure_probability",
+        "income_spending",
+        "total_tax",
+    }
+    selected_chart_keys = []
+    columns = st.columns(2)
+    safe_scope = sanitise_filename_part(widget_scope, fallback="pdf")
+    for index, chart_key in enumerate(PDF_CHART_KEYS):
+        label = CHART_LABELS[chart_key][1 if is_cn() else 0]
+        with columns[index % 2]:
+            include_chart = st.checkbox(
+                label,
+                value=chart_key in default_charts,
+                key=f"pdf_chart_{safe_scope}_{chart_key}",
+            )
+        if include_chart:
+            selected_chart_keys.append(chart_key)
+
+    if not selected_chart_keys:
+        st.info(t(
+            "No chart is selected. The PDF will still contain the written outlook and milestone summary.",
+            "目前未选择图表。PDF 仍会包含未来情况和关键节点的文字摘要。",
+        ))
+
+    try:
+        pdf_file = build_pdf_report_bytes(
+            selected_result=selected_result,
+            comparison_results=comparison_results,
+            selected_scenario=selected_scenario,
+            selected_chart_keys=selected_chart_keys,
+            value_mode=value_mode,
+            input_warnings=input_warnings,
+            output_warnings=output_warnings,
+        )
+    except Exception as exc:
+        st.error(t(
+            f"PDF preparation failed: {exc}",
+            f"PDF 准备失败：{exc}",
+        ))
+        return
+
+    st.download_button(
+        label=t("Export PDF Report", "一键导出 PDF 报告"),
+        data=pdf_file,
+        file_name=build_export_filename(
+            selected_result["inputs"].get("report_title", ""),
+            "financial_projection_report",
+            selected_scenario,
+            "pdf",
+        ),
+        mime="application/pdf",
+        use_container_width=True,
+        key=f"download_pdf_{safe_scope}",
+    )
 
 
 # ============================================================
@@ -2984,6 +3059,19 @@ if active_result_bundle is not None and workspace_mode == "View Results":
     display_det_df = convert_det_df_for_value_mode(selected_result["det_df"], selected_result["inputs"], value_mode)
     display_percentile_df = convert_percentile_df_for_value_mode(selected_result["percentile_df"], selected_result["inputs"], value_mode)
     display_summary_df = convert_summary_df_for_value_mode(selected_result["summary_df"], selected_result["inputs"], value_mode)
+    pdf_selected_result = {
+        **selected_result,
+        "det_df": display_det_df,
+        "percentile_df": display_percentile_df,
+        "summary_df": display_summary_df,
+    }
+    pdf_comparison_results = {
+        scenario_name: {
+            **result,
+            "det_df": convert_det_df_for_value_mode(result["det_df"], result["inputs"], value_mode),
+        }
+        for scenario_name, result in comparison_results.items()
+    }
 
     if is_one_person_inputs(selected_result["inputs"]):
         st.info(t("This result is a single-person projection. Person 2 is fully excluded from inputs, calculations, charts, tables, and exports.", "当前结果为单人预测。Person 2 已从输入、计算、图表、表格和导出中完全排除。"))
@@ -3136,6 +3224,18 @@ if active_result_bundle is not None and workspace_mode == "View Results":
 
         elif adviser_result_section == t("Export", "导出"):
             st.subheader(t("Export", "导出"))
+            render_pdf_export_controls(
+                selected_result=pdf_selected_result,
+                comparison_results=pdf_comparison_results,
+                selected_scenario=selected_scenario,
+                value_mode=value_mode,
+                input_warnings=(input_warnings_by_scenario or {}).get(selected_scenario, []),
+                output_warnings=(output_warnings_by_scenario or {}).get(selected_scenario, []),
+                widget_scope=f"{active_name_display}_{selected_scenario}_{value_mode}_adviser",
+            )
+
+            st.divider()
+            st.subheader(t("Excel Workbook", "Excel 工作簿"))
             st.caption(t("Excel is prepared only on demand to avoid slowing down result navigation.", "Excel 只在需要时生成，避免拖慢结果页切换。"))
             prepare_export = st.button(t("Prepare Excel Export", "准备 Excel 导出"), use_container_width=True)
             if prepare_export:
@@ -3187,6 +3287,17 @@ if active_result_bundle is not None and workspace_mode == "View Results":
         failure_fig = create_failure_probability_chart(selected_result["failure_prob_df"], selected_result["inputs"], t(f"Cumulative Probability of Running Out of Money - {selected_scenario}", f"资金耗尽累计概率 - {selected_scenario}"))
         failure_fig.update_layout(xaxis_title=t("Financial Year", "财政年度"), yaxis_title=t("Failure Probability", "资金耗尽概率"))
         st.plotly_chart(failure_fig, use_container_width=True, key=chart_key("failure", selected_scenario, view_mode, "client"))
+
+        with st.expander(t("Export PDF Report", "导出 PDF 报告"), expanded=False):
+            render_pdf_export_controls(
+                selected_result=pdf_selected_result,
+                comparison_results=pdf_comparison_results,
+                selected_scenario=selected_scenario,
+                value_mode=value_mode,
+                input_warnings=(input_warnings_by_scenario or {}).get(selected_scenario, []),
+                output_warnings=(output_warnings_by_scenario or {}).get(selected_scenario, []),
+                widget_scope=f"{active_name_display}_{selected_scenario}_{value_mode}_client",
+            )
 
 elif active_result_bundle is not None and workspace_mode != "View Results":
     st.info(t(
