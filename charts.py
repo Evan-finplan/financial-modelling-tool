@@ -369,12 +369,21 @@ def create_cashflow_chart(det_df, inputs, title_text):
     inflows = [
         ("household_net_income", "Net Household Income", "家庭税后净收入", "#1F77B4"),
         ("total_minimum_pension_drawdown", "Minimum Pension Drawdown", "最低退休金提取", "#2CA02C"),
+        ("cash_reserve_withdrawal", "Cash Reserve", "现金储备提取", "#00CC96"),
         ("non_super_withdrawal", "Non-Super Withdrawal", "非养老金资产提取", "#17BECF"),
         ("total_extra_super_withdrawal", "Extra Super Withdrawal", "额外养老金提取", "#9467BD"),
+        ("residential_property_sale_proceeds", "Property Sale Proceeds", "物业出售所得", "#FFA15A"),
     ]
     outflows = [
         ("spending", "Household Spending", "家庭支出", "#D62728"),
         ("total_cash_contributions", "Cash Contributions", "现金缴款", "#FF7F0E"),
+        ("non_deductible_debt_interest", "Non-deductible Interest", "不可抵扣债务利息", "#B22222"),
+        ("non_deductible_principal_repayment", "Non-deductible Principal", "不可抵扣债务本金偿还", "#E45756"),
+        ("deductible_principal_repayment", "Deductible Principal", "可抵扣债务本金偿还", "#F58518"),
+        ("non_deductible_offset_contribution", "Non-deductible Offset", "不可抵扣 Offset 存入", "#7A5195"),
+        ("deductible_offset_contribution", "Deductible Offset", "可抵扣债务 Offset 存入", "#BC5090"),
+        ("cash_reserve_top_up", "Cash Reserve Top-up", "现金储备补充", "#4C78A8"),
+        ("surplus_cash_to_non_super", "Non-Super Investment", "非养老金投资", "#59A14F"),
         ("non_super_tax_paid", "Non-Super Tax", "非养老金投资税", "#8C564B"),
         ("total_super_withdrawal_cgt_tax", "Super Withdrawal CGT", "养老金提取资本利得税", "#E377C2"),
     ]

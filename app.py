@@ -8,6 +8,11 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+from debt_analysis import (
+    DEBT_STRATEGY_PROFILES,
+    apply_debt_strategy_profile,
+    build_debt_strategy_comparison_df,
+)
 from charts import (
     create_deterministic_wealth_chart_comparison,
     create_failure_probability_chart,
@@ -40,6 +45,12 @@ from model import (
     validate_inputs,
 )
 from pdf_report import CHART_LABELS, PDF_CHART_KEYS, build_pdf_report_bytes
+from strategy_analysis import (
+    STRATEGY_PROFILES,
+    apply_strategy_profile,
+    build_assumption_change_df,
+    build_strategy_comparison_df,
+)
 
 
 # ============================================================
@@ -234,6 +245,16 @@ def render_pdf_export_controls(
         "请勾选需要导出的图表。报告始终包含未来情况概述、关键节点、核心结果、审阅事项及相关解释。",
     ))
 
+    report_detail = st.selectbox(
+        t("Report Detail", "报告详细程度"),
+        options=["Client Summary", "Advice Support Report", "Technical Appendix"],
+        key=f"pdf_detail_{sanitise_filename_part(widget_scope, fallback='pdf')}",
+        help=t(
+            "Client Summary is concise. Advice Support adds strategy analysis and adviser notes. Technical Appendix also includes assumptions, policy status and calculation methodology.",
+            "Client Summary 为简要版；Advice Support 增加策略分析与顾问备注；Technical Appendix 还包含假设、政策状态及计算方法。",
+        ),
+    )
+
     default_charts = {
         "wealth_projection",
         "percentile_paths",
@@ -271,6 +292,8 @@ def render_pdf_export_controls(
             input_warnings=input_warnings,
             output_warnings=output_warnings,
             report_language=LANGUAGE_CN if is_cn() else LANGUAGE_EN,
+            report_detail=report_detail,
+            adviser_notes=st.session_state.get("adviser_notes", ""),
         )
     except Exception as exc:
         st.error(t(
@@ -329,6 +352,17 @@ INPUT_EXCEL_FIELDS = [
     "person2_annual_income",
     "non_super_balance",
     "non_super_cost_base",
+    "cash_reserve_balance",
+    "cash_reserve_floor",
+    "cash_reserve_target",
+    "non_deductible_debt_balance",
+    "non_deductible_interest_rate",
+    "non_deductible_offset_balance",
+    "deductible_offset_balance",
+    "surplus_allocation_profile",
+    "non_super_estate_reserve",
+    "property_estate_reserve",
+    "drawdown_profile",
     "cgt_reform_enabled",
     "cgt_asset_acquired_before_2027",
     "non_super_transition_value_2027",
@@ -341,6 +375,7 @@ INPUT_EXCEL_FIELDS = [
     "residential_property_enabled",
     "residential_property_value",
     "residential_property_loan_balance",
+    "residential_property_sale_cost_rate",
     "residential_property_gross_rent",
     "residential_property_operating_expenses",
     "residential_property_interest_rate",
@@ -728,6 +763,17 @@ def build_assumption_details_df(inputs_by_scenario):
                 "person1_transfer_balance_cap": scenario_inputs["person1_transfer_balance_cap"],
                 "person2_transfer_balance_cap": scenario_inputs["person2_transfer_balance_cap"],
                 "non_super_balance": scenario_inputs["non_super_balance"],
+                "cash_reserve_balance": scenario_inputs.get("cash_reserve_balance", 0.0),
+                "cash_reserve_floor": scenario_inputs.get("cash_reserve_floor", 0.0),
+                "cash_reserve_target": scenario_inputs.get("cash_reserve_target", 0.0),
+                "non_deductible_debt_balance": scenario_inputs.get("non_deductible_debt_balance", 0.0),
+                "non_deductible_interest_rate": scenario_inputs.get("non_deductible_interest_rate", 0.0),
+                "non_deductible_offset_balance": scenario_inputs.get("non_deductible_offset_balance", 0.0),
+                "deductible_offset_balance": scenario_inputs.get("deductible_offset_balance", 0.0),
+                "surplus_allocation_order": " > ".join(scenario_inputs.get("surplus_allocation_order", [])),
+                "withdrawal_order": " > ".join(scenario_inputs.get("withdrawal_order", [])),
+                "non_super_estate_reserve": scenario_inputs.get("non_super_estate_reserve", 0.0),
+                "property_estate_reserve": scenario_inputs.get("property_estate_reserve", 0.0),
                 "cgt_reform_enabled": scenario_inputs.get("cgt_reform_enabled", True),
                 "non_super_transition_value_2027": scenario_inputs.get("non_super_transition_value_2027", scenario_inputs["non_super_balance"]),
                 "non_super_opening_capital_losses": scenario_inputs.get("non_super_opening_capital_losses", 0.0),
@@ -886,8 +932,17 @@ def build_adviser_cashflow_df(det_df):
         safe_col("household_net_income")
         + safe_col("total_minimum_pension_drawdown")
         + safe_col("total_extra_super_withdrawal")
+        + safe_col("cash_reserve_withdrawal")
         + safe_col("non_super_withdrawal")
+        + safe_col("residential_property_sale_proceeds")
         - safe_col("total_cash_contributions")
+        - safe_col("non_deductible_debt_interest")
+        - safe_col("non_deductible_principal_repayment")
+        - safe_col("deductible_principal_repayment")
+        - safe_col("non_deductible_offset_contribution")
+        - safe_col("deductible_offset_contribution")
+        - safe_col("cash_reserve_top_up")
+        - safe_col("surplus_cash_to_non_super")
         - safe_col("non_super_tax_paid")
         - safe_col("total_super_withdrawal_cgt_tax")
     )
@@ -919,12 +974,16 @@ def build_adviser_cashflow_asset_movement_tax_df(det_df, inputs):
 
     opening_net_assets = (
         safe_col("opening_non_super_balance")
+        + safe_col("opening_cash_reserve_balance")
         + safe_col("opening_person1_accum_super_balance")
         + safe_col("opening_person1_pension_super_balance")
         + safe_col("opening_person2_accum_super_balance")
         + safe_col("opening_person2_pension_super_balance")
         + safe_col("opening_residential_property_value")
-        - safe_col("residential_property_loan_balance")
+        + safe_col("opening_non_deductible_offset_balance")
+        + safe_col("opening_deductible_offset_balance")
+        - safe_col("opening_residential_property_loan_balance")
+        - safe_col("opening_non_deductible_debt_balance")
     )
 
     closing_net_assets = safe_col("total_wealth")
@@ -957,6 +1016,11 @@ def build_adviser_cashflow_asset_movement_tax_df(det_df, inputs):
         "Total Income": safe_col("household_gross_income") + investment_earnings,
         "Household Spending": safe_col("spending"),
         "Cash Contributions": safe_col("total_cash_contributions"),
+        "Non-deductible Interest": safe_col("non_deductible_debt_interest"),
+        "Non-deductible Principal Repayment": safe_col("non_deductible_principal_repayment"),
+        "Deductible Principal Repayment": safe_col("deductible_principal_repayment"),
+        "Non-deductible Offset Contribution": safe_col("non_deductible_offset_contribution"),
+        "Deductible Offset Contribution": safe_col("deductible_offset_contribution"),
         "Minimum Pension Drawdown": safe_col("total_minimum_pension_drawdown"),
         "Non-Super Withdrawal": safe_col("non_super_withdrawal"),
         "Extra Super Withdrawal": safe_col("total_extra_super_withdrawal"),
@@ -974,6 +1038,10 @@ def build_adviser_cashflow_asset_movement_tax_df(det_df, inputs):
         "Super Withdrawal CGT Tax": safe_col("total_super_withdrawal_cgt_tax"),
         "Total Tax Paid": safe_col("total_tax_paid"),
         "Surplus Cash to Non-Super": safe_col("surplus_cash_to_non_super"),
+        "Closing Non-deductible Debt": safe_col("non_deductible_debt_balance"),
+        "Closing Deductible Debt": safe_col("residential_property_loan_balance"),
+        "Closing Non-deductible Offset": safe_col("non_deductible_offset_balance"),
+        "Closing Deductible Offset": safe_col("deductible_offset_balance"),
         "Unmet Shortfall": safe_col("unmet_shortfall"),
         "Closing Net Assets": closing_net_assets,
         "Net Asset Movement": closing_net_assets - opening_net_assets,
@@ -1693,6 +1761,20 @@ defaults = {
     "person2_annual_income": 60000.0,
     "non_super_balance": 500000.0,
     "non_super_cost_base": 300000.0,
+    "cash_reserve_balance": 50000.0,
+    "cash_reserve_floor": 10000.0,
+    "cash_reserve_target": 50000.0,
+    "non_deductible_debt_balance": 0.0,
+    "non_deductible_interest_rate": 0.06,
+    "non_deductible_offset_balance": 0.0,
+    "deductible_offset_balance": 0.0,
+    "surplus_allocation_profile": "Non-deductible Offset > Non-deductible Debt > Deductible Offset > Deductible Debt > Invest",
+    "surplus_allocation_order": ["non_deductible_offset", "non_deductible_repayment", "deductible_offset", "deductible_repayment", "non_super"],
+    "non_super_estate_reserve": 0.0,
+    "property_estate_reserve": 0.0,
+    "residential_property_sale_cost_rate": 0.025,
+    "withdrawal_order": ["cash", "non_super", "pension", "accumulation", "property"],
+    "drawdown_profile": "Cash > Non-super > Pension > Accumulation > Property",
     "cgt_reform_enabled": True,
     "cgt_asset_acquired_before_2027": True,
     "non_super_transition_value_2027": 500000.0,
@@ -1737,6 +1819,7 @@ defaults = {
     "inflation_rate": 0.030,
     "number_of_simulations": 1000,
     "random_seed": 42,
+    "adviser_notes": "",
     "ui_language": LANGUAGE_EN,
     "preset_table_df": get_default_preset_table_df(),
     "contribution_events_df": get_default_contribution_events_df(),
@@ -1817,6 +1900,20 @@ person2_annual_income = st.session_state.person2_annual_income
 
 non_super_balance = st.session_state.non_super_balance
 non_super_cost_base = st.session_state.non_super_cost_base
+cash_reserve_balance = st.session_state.cash_reserve_balance
+cash_reserve_floor = st.session_state.cash_reserve_floor
+cash_reserve_target = st.session_state.cash_reserve_target
+non_deductible_debt_balance = st.session_state.non_deductible_debt_balance
+non_deductible_interest_rate = st.session_state.non_deductible_interest_rate
+non_deductible_offset_balance = st.session_state.non_deductible_offset_balance
+deductible_offset_balance = st.session_state.deductible_offset_balance
+surplus_allocation_profile = st.session_state.surplus_allocation_profile
+surplus_allocation_order = list(st.session_state.surplus_allocation_order)
+non_super_estate_reserve = st.session_state.non_super_estate_reserve
+property_estate_reserve = st.session_state.property_estate_reserve
+residential_property_sale_cost_rate = st.session_state.residential_property_sale_cost_rate
+drawdown_profile = st.session_state.drawdown_profile
+withdrawal_order = list(st.session_state.withdrawal_order)
 cgt_reform_enabled = st.session_state.cgt_reform_enabled
 cgt_asset_acquired_before_2027 = st.session_state.cgt_asset_acquired_before_2027
 non_super_transition_value_2027 = st.session_state.non_super_transition_value_2027
@@ -1941,7 +2038,12 @@ with st.sidebar:
 
     scenario_mode = st.radio(
         t("Scenario Mode", "情景模式"),
-        options=[t("Single Scenario", "单一情景"), t("Compare Standard Presets", "比较标准预设")],
+        options=[
+            t("Single Scenario", "单一情景"),
+            t("Compare Standard Presets", "比较标准预设"),
+            t("Compare Asset Drawdown Strategies", "比较资产提取策略"),
+            t("Compare Debt Repayment Strategies", "比较债务偿还策略"),
+        ],
     )
 
     simulation_depth_options = ["Fast", "Standard", "Deep"]
@@ -1964,7 +2066,7 @@ with st.sidebar:
         t("Assumption Preset", "假设预设"),
         options=["Conservative", "Base Case", "Optimistic", "Custom"],
         key="assumption_preset",
-        disabled=(scenario_mode == t("Compare Standard Presets", "比较标准预设")),
+        disabled=(scenario_mode != t("Single Scenario", "单一情景")),
     )
 
     if is_one_person_mode:
@@ -2103,11 +2205,11 @@ if delete_button:
 
 
 st.title(t("Retirement Modelling Suite (Australia)", "退休建模工具（澳大利亚）"))
-st.subheader(t("Superannuation • Tax • CGT • Retirement Cashflow Modelling", "养老金 • 税务 • 资本利得税 • 退休现金流建模"))
+st.subheader(t("Superannuation • Tax • CGT • Debt • Retirement Cashflow Modelling", "养老金 • 税务 • 资本利得税 • 债务 • 退休现金流建模"))
 st.caption(
     t(
-        "A professional financial modelling tool for analysing retirement outcomes, superannuation strategies, and tax impacts under Australian rules.",
-        "一个用于分析澳大利亚退休结果、养老金策略与税务影响的专业金融建模工具。"
+        "A professional financial modelling tool for analysing retirement outcomes, superannuation, tax, asset drawdown and debt strategies under Australian rules.",
+        "一个用于分析澳大利亚退休结果、养老金、税务、资产提取及债务策略的专业金融建模工具。"
     )
 )
 st.warning(
@@ -2120,9 +2222,9 @@ with st.container(border=True):
     st.markdown(
         t(
             """### Overview
-Use this tool to model retirement sustainability, super accumulation to pension transitions, Transfer Balance Cap constraints, and tax impacts under multiple scenarios.""",
+Use this tool to model retirement sustainability, super accumulation to pension transitions, Transfer Balance Cap constraints, tax impacts, asset drawdown order, and alternative debt repayment or cash-surplus strategies.""",
             """### 概览
-本工具可用于建模退休可持续性、养老金从积累阶段转入退休金阶段、Transfer Balance Cap 限制，以及不同情景下的税务影响。"""
+本工具可用于建模退休可持续性、养老金从积累阶段转入退休金阶段、Transfer Balance Cap 限制、不同情景下的税务影响、资产提取顺序，以及不同债务偿还或现金盈余分配策略。"""
         )
     )
 
@@ -2511,6 +2613,109 @@ with st.form("input_editor_form", clear_on_submit=False):
                 ) * 100.0
 
         st.divider()
+        st.subheader(t("Asset Drawdown & Estate Reserves", "资产提取与遗产保留"))
+        st.caption(t(
+            "The selected order determines which assets fund an annual cash shortfall first. Minimum reserve amounts are preserved where possible.",
+            "所选顺序决定年度现金缺口优先由哪些资产提供。模型会尽量保留所设定的最低储备金额。",
+        ))
+        drawdown_profiles = {
+            "Cash > Non-super > Pension > Accumulation > Property": ["cash", "non_super", "pension", "accumulation", "property"],
+            "Cash > Pension > Accumulation > Non-super > Property": ["cash", "pension", "accumulation", "non_super", "property"],
+            "Cash > Property > Non-super > Pension > Accumulation": ["cash", "property", "non_super", "pension", "accumulation"],
+            "Cash > Pension > Accumulation > Property > Non-super": ["cash", "pension", "accumulation", "property", "non_super"],
+        }
+        drawdown_profile = st.selectbox(
+            t("Drawdown Order", "资产提取顺序"),
+            options=list(drawdown_profiles),
+            index=list(drawdown_profiles).index(st.session_state.get("drawdown_profile", next(iter(drawdown_profiles)))),
+            help=t("Minimum pension payments still occur before discretionary withdrawals.", "最低 Pension 提取仍会在可选择的额外提取之前发生。"),
+        )
+        withdrawal_order = drawdown_profiles[drawdown_profile]
+        dr1, dr2, dr3, dr4 = st.columns(4)
+        with dr1:
+            cash_reserve_balance = currency_text_input(
+                t("Opening Cash Reserve", "期初现金储备"),
+                st.session_state.cash_reserve_balance,
+                "cash_reserve_balance_input",
+            )
+        with dr2:
+            cash_reserve_floor = currency_text_input(
+                t("Minimum Cash Reserve", "最低现金储备"),
+                st.session_state.cash_reserve_floor,
+                "cash_reserve_floor_input",
+            )
+        with dr3:
+            non_super_estate_reserve = currency_text_input(
+                t("Non-super Estate Reserve", "非养老金遗产保留"),
+                st.session_state.non_super_estate_reserve,
+                "non_super_estate_reserve_input",
+            )
+        with dr4:
+            property_estate_reserve = currency_text_input(
+                t("Property Equity Reserve", "物业净值保留"),
+                st.session_state.property_estate_reserve,
+                "property_estate_reserve_input",
+            )
+
+        st.divider()
+        st.subheader(t("Debt & Cash Surplus Strategy", "债务与现金盈余策略"))
+        st.caption(t(
+            "Non-deductible debt covers private-purpose borrowing such as a home loan. Deductible debt is the investment-property loan entered on the Property & Trust page. Interest deductibility depends on the use of borrowed funds, not the asset used as security.",
+            "不可抵扣债务包括自住房贷款等私人用途借款。可抵扣债务采用“住宅投资物业”页面中输入的投资物业贷款。利息能否抵扣取决于借款资金用途，而不是用于担保的资产。",
+        ))
+        surplus_profiles = {
+            "Non-deductible Offset > Non-deductible Debt > Deductible Offset > Deductible Debt > Invest": ["non_deductible_offset", "non_deductible_repayment", "deductible_offset", "deductible_repayment", "non_super"],
+            "Non-deductible Debt > Non-deductible Offset > Deductible Offset > Invest": ["non_deductible_repayment", "non_deductible_offset", "deductible_offset", "non_super"],
+            "Deductible Debt > Deductible Offset > Non-deductible Debt > Invest": ["deductible_repayment", "deductible_offset", "non_deductible_repayment", "non_super"],
+            "Cash Reserve > Non-deductible Offset > Invest": ["cash_reserve", "non_deductible_offset", "non_super"],
+            "Invest All Surplus": ["non_super"],
+        }
+        surplus_allocation_profile = st.selectbox(
+            t("Annual Surplus Allocation", "年度盈余分配"),
+            options=list(surplus_profiles),
+            index=list(surplus_profiles).index(st.session_state.get("surplus_allocation_profile", next(iter(surplus_profiles)))),
+            help=t("The first destination is filled to its available limit before the next destination is used.", "模型先把第一项填至可用上限，再把剩余盈余分配至下一项。"),
+        )
+        surplus_allocation_order = surplus_profiles[surplus_allocation_profile]
+        db1, db2, db3 = st.columns(3)
+        with db1:
+            non_deductible_debt_balance = currency_text_input(
+                t("Opening Non-deductible Debt", "期初不可抵扣债务"),
+                st.session_state.non_deductible_debt_balance,
+                "non_deductible_debt_balance_input",
+                help_text=t("For example, private home-loan or personal borrowing balances.", "例如自住房贷款或其他私人用途借款余额。"),
+            )
+            non_deductible_interest_rate = percentage_text_input(
+                t("Non-deductible Interest Rate", "不可抵扣债务利率"),
+                st.session_state.non_deductible_interest_rate,
+                "non_deductible_interest_rate_input",
+                decimals=2,
+            )
+        with db2:
+            non_deductible_offset_balance = currency_text_input(
+                t("Opening Non-deductible Offset", "期初不可抵扣 Offset"),
+                st.session_state.non_deductible_offset_balance,
+                "non_deductible_offset_balance_input",
+            )
+            deductible_offset_balance = currency_text_input(
+                t("Opening Deductible-debt Offset", "期初可抵扣债务 Offset"),
+                st.session_state.deductible_offset_balance,
+                "deductible_offset_balance_input",
+                help_text=t("Linked to the modelled investment-property loan.", "与模型中的投资物业贷款相连接。"),
+            )
+        with db3:
+            cash_reserve_target = currency_text_input(
+                t("Cash Reserve Target", "现金储备目标"),
+                st.session_state.cash_reserve_target,
+                "cash_reserve_target_input",
+                help_text=t("Used only by strategies that allocate surplus to Cash Reserve.", "仅供把盈余分配至现金储备的策略使用。"),
+            )
+            st.metric(
+                t("Opening Net Non-deductible Debt", "期初净不可抵扣债务"),
+                f"${max(non_deductible_debt_balance - non_deductible_offset_balance, 0):,.0f}",
+            )
+
+        st.divider()
         st.subheader(t("2026 Budget CGT Reform", "2026 Budget CGT 改革"))
         st.caption(t(
             "From 2027-28, the pooled model separates deferred pre-1 July 2027 gains from indexed real gains and estimates the Division 119 30% minimum-tax top-up.",
@@ -2637,6 +2842,13 @@ with st.form("input_editor_form", clear_on_submit=False):
                 st.session_state.residential_property_expense_growth_rate,
                 "residential_property_expense_growth_rate_input",
                 decimals=1,
+            )
+            residential_property_sale_cost_rate = percentage_text_input(
+                t("Estimated Sale Costs", "预计出售成本"),
+                st.session_state.residential_property_sale_cost_rate,
+                "residential_property_sale_cost_rate_input",
+                decimals=2,
+                help_text=t("Applied proportionally when the drawdown strategy uses part or all of the property equity. Property CGT is not yet modelled.", "当资产提取策略使用部分或全部物业净值时按比例计入。物业 CGT 尚未建模。"),
             )
 
         rq1, rq2, rq3 = st.columns(3)
@@ -2927,6 +3139,19 @@ st.session_state.person1_annual_income = person1_annual_income
 st.session_state.person2_annual_income = person2_annual_income
 st.session_state.non_super_balance = non_super_balance
 st.session_state.non_super_cost_base = non_super_cost_base
+st.session_state.cash_reserve_balance = cash_reserve_balance
+st.session_state.cash_reserve_floor = cash_reserve_floor
+st.session_state.cash_reserve_target = cash_reserve_target
+st.session_state.non_deductible_debt_balance = non_deductible_debt_balance
+st.session_state.non_deductible_interest_rate = non_deductible_interest_rate
+st.session_state.non_deductible_offset_balance = non_deductible_offset_balance
+st.session_state.deductible_offset_balance = deductible_offset_balance
+st.session_state.surplus_allocation_profile = surplus_allocation_profile
+st.session_state.surplus_allocation_order = surplus_allocation_order
+st.session_state.non_super_estate_reserve = non_super_estate_reserve
+st.session_state.property_estate_reserve = property_estate_reserve
+st.session_state.drawdown_profile = drawdown_profile
+st.session_state.withdrawal_order = withdrawal_order
 st.session_state.cgt_reform_enabled = bool(cgt_reform_enabled)
 st.session_state.cgt_asset_acquired_before_2027 = bool(cgt_asset_acquired_before_2027)
 st.session_state.non_super_transition_value_2027 = non_super_transition_value_2027
@@ -2938,6 +3163,7 @@ st.session_state.cgt_held_at_least_12_months = bool(cgt_held_at_least_12_months)
 st.session_state.cgt_minimum_tax_exempt = bool(cgt_minimum_tax_exempt)
 st.session_state.residential_property_enabled = bool(residential_property_enabled)
 st.session_state.residential_property_value = residential_property_value
+st.session_state.residential_property_sale_cost_rate = residential_property_sale_cost_rate
 st.session_state.residential_property_loan_balance = residential_property_loan_balance
 st.session_state.residential_property_gross_rent = residential_property_gross_rent
 st.session_state.residential_property_operating_expenses = residential_property_operating_expenses
@@ -3031,6 +3257,18 @@ base_inputs = {
     "person2_transfer_balance_cap": 0.0 if is_one_person_mode else float(st.session_state.person2_transfer_balance_cap),
     "non_super_balance": float(st.session_state.non_super_balance),
     "non_super_cost_base": float(st.session_state.non_super_cost_base),
+    "cash_reserve_balance": float(st.session_state.cash_reserve_balance),
+    "cash_reserve_floor": float(st.session_state.cash_reserve_floor),
+    "cash_reserve_target": float(st.session_state.cash_reserve_target),
+    "non_deductible_debt_balance": float(st.session_state.non_deductible_debt_balance),
+    "non_deductible_interest_rate": float(st.session_state.non_deductible_interest_rate),
+    "non_deductible_offset_balance": float(st.session_state.non_deductible_offset_balance),
+    "deductible_offset_balance": float(st.session_state.deductible_offset_balance),
+    "surplus_allocation_order": list(st.session_state.surplus_allocation_order),
+    "surplus_allocation_profile": st.session_state.surplus_allocation_profile,
+    "non_super_estate_reserve": float(st.session_state.non_super_estate_reserve),
+    "property_estate_reserve": float(st.session_state.property_estate_reserve),
+    "withdrawal_order": list(st.session_state.withdrawal_order),
     "cgt_reform_enabled": bool(st.session_state.cgt_reform_enabled),
     "cgt_asset_acquired_before_2027": bool(st.session_state.cgt_asset_acquired_before_2027),
     "non_super_transition_value_2027": float(st.session_state.non_super_transition_value_2027),
@@ -3043,6 +3281,7 @@ base_inputs = {
     "residential_property_enabled": bool(st.session_state.residential_property_enabled),
     "residential_property_value": float(st.session_state.residential_property_value),
     "residential_property_loan_balance": float(st.session_state.residential_property_loan_balance),
+    "residential_property_sale_cost_rate": float(st.session_state.residential_property_sale_cost_rate),
     "residential_property_gross_rent": float(st.session_state.residential_property_gross_rent),
     "residential_property_operating_expenses": float(st.session_state.residential_property_operating_expenses),
     "residential_property_interest_rate": float(st.session_state.residential_property_interest_rate),
@@ -3099,11 +3338,29 @@ if run_button:
             scenario_inputs_map = {"Custom": base_inputs.copy()}
         else:
             scenario_inputs_map = {preset_choice: apply_preset_to_inputs(base_inputs, preset_choice, runtime_presets)}
-    else:
+    elif scenario_mode == t("Compare Standard Presets", "比较标准预设"):
         scenario_inputs_map = {
             "Conservative": apply_preset_to_inputs(base_inputs, "Conservative", runtime_presets),
             "Base Case": apply_preset_to_inputs(base_inputs, "Base Case", runtime_presets),
             "Optimistic": apply_preset_to_inputs(base_inputs, "Optimistic", runtime_presets),
+        }
+    elif scenario_mode == t("Compare Asset Drawdown Strategies", "比较资产提取策略"):
+        strategy_base = (
+            apply_preset_to_inputs(base_inputs, preset_choice, runtime_presets)
+            if preset_choice in runtime_presets else base_inputs.copy()
+        )
+        scenario_inputs_map = {
+            strategy_name: apply_strategy_profile(strategy_base, strategy_name)
+            for strategy_name in STRATEGY_PROFILES
+        }
+    else:
+        debt_base = (
+            apply_preset_to_inputs(base_inputs, preset_choice, runtime_presets)
+            if preset_choice in runtime_presets else base_inputs.copy()
+        )
+        scenario_inputs_map = {
+            strategy_name: apply_debt_strategy_profile(debt_base, strategy_name)
+            for strategy_name in DEBT_STRATEGY_PROFILES
         }
 
     all_validation_errors = []
@@ -3132,7 +3389,7 @@ if run_button:
             scenario_result = run_scenario_cached(
                 scenario_inputs,
                 int(random_seed),
-                cache_version="performance_v2",
+                cache_version="debt_strategy_v1",
             )
 
             input_warnings_by_scenario[scenario_name] = generate_input_warnings(scenario_inputs)
@@ -3243,6 +3500,8 @@ if active_result_bundle is not None and workspace_mode == "View Results":
 
         adviser_sections = [
             t("Overview", "总览"),
+            t("Strategy Comparison", "策略对比"),
+            t("Debt Strategies", "债务策略"),
             t("Wealth Charts", "财富图表"),
             t("Monte Carlo", "蒙特卡洛"),
             t("Tax", "税务"),
@@ -3276,6 +3535,167 @@ if active_result_bundle is not None and workspace_mode == "View Results":
             median_fig = create_median_wealth_comparison_chart(comparison_df)
             median_fig.update_layout(title=t("Median Final Wealth by Scenario", "各情景最终财富中位数"), xaxis_title=t("Scenario", "情景"), yaxis_title=t("Median Final Wealth", "最终财富中位数"))
             st.plotly_chart(median_fig, use_container_width=True, key="median_wealth_comparison")
+
+        elif adviser_result_section == t("Strategy Comparison", "策略对比"):
+            st.subheader(t("Strategy Comparison", "策略对比"))
+            st.caption(t(
+                "Compares asset drawdown order, after-tax cashflow, retirement wealth, final wealth, failure probability, cumulative tax, advantage timing and key risks. Differences are modelled outcomes, not personal advice.",
+                "比较资产提取顺序、税后现金流、退休时财富、最终财富、失败概率、累计税、优势起点、break-even 和关键风险。差异属于模型结果，不构成个人建议。",
+            ))
+            strategy_df = build_strategy_comparison_df(comparison_results, is_chinese=is_cn())
+            assumption_change_df = build_assumption_change_df(comparison_results, is_chinese=is_cn())
+            if strategy_df.empty:
+                st.info(t("Run at least one scenario to build the comparison.", "请至少运行一个情景以生成比较。"))
+            else:
+                display_strategy_df = strategy_df.copy()
+                display_strategy_df["failure_probability"] = display_strategy_df["failure_probability"].map(lambda value: f"{value:.1%}")
+                for column in ["after_tax_cashflow", "retirement_wealth", "final_wealth", "final_wealth_delta", "cumulative_tax", "cumulative_tax_delta"]:
+                    display_strategy_df[column] = display_strategy_df[column].map(lambda value: f"${value:,.0f}")
+                display_strategy_df["first_advantage_year"] = display_strategy_df["first_advantage_year"].map(lambda value: "-" if pd.isna(value) else f"FY{int(value)}")
+                display_strategy_df["break_even_year"] = display_strategy_df["break_even_year"].map(lambda value: "-" if pd.isna(value) else f"FY{int(value)}")
+                display_strategy_df = display_strategy_df.rename(columns={
+                    "scenario": t("Scenario", "情景"),
+                    "strategy_description": t("Strategy", "策略"),
+                    "after_tax_cashflow": t("Cumulative After-tax Cashflow", "累计税后现金流"),
+                    "retirement_wealth": t("Wealth at Retirement", "退休时财富"),
+                    "final_wealth": t("Final Wealth", "最终财富"),
+                    "final_wealth_delta": t("Final Wealth vs Base", "最终财富较 Base 差异"),
+                    "failure_probability": t("Failure Probability", "失败概率"),
+                    "cumulative_tax": t("Cumulative Tax", "累计税款"),
+                    "cumulative_tax_delta": t("Tax vs Base", "税款较 Base 差异"),
+                    "first_advantage_year": t("First Advantage", "首次产生优势"),
+                    "break_even_year": t("Break-even", "收支平衡年"),
+                    "key_risks": t("Key Risks", "关键风险"),
+                })
+                st.dataframe(display_strategy_df, use_container_width=True, hide_index=True)
+
+                sc1, sc2 = st.columns(2)
+                with sc1:
+                    wealth_delta_fig = px.bar(
+                        strategy_df,
+                        x="scenario",
+                        y="final_wealth_delta",
+                        color="scenario",
+                        title=t("Final Wealth Difference vs Base Case", "最终财富相对 Base Case 的差异"),
+                    )
+                    wealth_delta_fig.update_layout(showlegend=False, xaxis_title=t("Scenario", "情景"), yaxis_title=t("Difference", "差异"))
+                    st.plotly_chart(wealth_delta_fig, use_container_width=True, key="strategy_final_wealth_delta")
+                with sc2:
+                    tax_delta_fig = px.bar(
+                        strategy_df,
+                        x="scenario",
+                        y="cumulative_tax_delta",
+                        color="scenario",
+                        title=t("Cumulative Tax Difference vs Base Case", "累计税款相对 Base Case 的差异"),
+                    )
+                    tax_delta_fig.update_layout(showlegend=False, xaxis_title=t("Scenario", "情景"), yaxis_title=t("Difference", "差异"))
+                    st.plotly_chart(tax_delta_fig, use_container_width=True, key="strategy_tax_delta")
+
+                st.subheader(t("Key Assumption Changes", "关键假设变化"))
+                st.dataframe(assumption_change_df, use_container_width=True, hide_index=True)
+                st.session_state.adviser_notes = st.text_area(
+                    t("Adviser Notes", "顾问备注"),
+                    value=st.session_state.get("adviser_notes", ""),
+                    height=130,
+                    help=t("Included in Advice Support and Technical Appendix reports.", "将纳入 Advice Support 和 Technical Appendix 报告。"),
+                )
+
+        elif adviser_result_section == t("Debt Strategies", "债务策略"):
+            st.subheader(t("Debt Repayment & Surplus Allocation Comparison", "债务偿还与盈余分配比较"))
+            st.caption(t(
+                "Compares annual interest, tax, debt-free timing, ending debt, offset liquidity, final wealth and failure probability. A lower deductible-interest bill can also reduce tax deductions, so interest saved and tax paid should be considered together.",
+                "比较年度利息、税款、清债时间、期末债务、Offset 流动性、最终财富及失败概率。降低可抵扣利息也会减少税务扣除，因此应结合利息节省与税款变化一并判断。",
+            ))
+            debt_df = build_debt_strategy_comparison_df(comparison_results, is_chinese=is_cn())
+            if debt_df.empty:
+                st.info(t("Run a scenario to build the debt comparison.", "请先运行情景以生成债务比较。"))
+            else:
+                display_debt_df = debt_df.copy()
+                for column in [
+                    "cumulative_interest",
+                    "interest_saved_vs_base",
+                    "cumulative_tax",
+                    "ending_non_deductible_debt",
+                    "ending_deductible_debt",
+                    "ending_offset_balance",
+                    "final_wealth",
+                    "final_wealth_delta",
+                ]:
+                    display_debt_df[column] = display_debt_df[column].map(lambda value: f"${value:,.0f}")
+                display_debt_df["failure_probability"] = display_debt_df["failure_probability"].map(lambda value: f"{value:.1%}")
+                for column in ["non_deductible_debt_free_year", "deductible_debt_free_year"]:
+                    display_debt_df[column] = display_debt_df[column].map(lambda value: "-" if pd.isna(value) else f"FY{int(value)}")
+                display_debt_df = display_debt_df.rename(columns={
+                    "scenario": t("Scenario", "情景"),
+                    "strategy_description": t("Strategy", "策略"),
+                    "allocation_order": t("Surplus Allocation Order", "盈余分配顺序"),
+                    "cumulative_interest": t("Cumulative Interest", "累计利息"),
+                    "interest_saved_vs_base": t("Interest Saved vs Base", "较 Base 节省利息"),
+                    "cumulative_tax": t("Cumulative Tax", "累计税款"),
+                    "ending_non_deductible_debt": t("Ending Non-deductible Debt", "期末不可抵扣债务"),
+                    "ending_deductible_debt": t("Ending Deductible Debt", "期末可抵扣债务"),
+                    "ending_offset_balance": t("Ending Offset", "期末 Offset"),
+                    "non_deductible_debt_free_year": t("Non-deductible Debt-free", "不可抵扣债务清偿年"),
+                    "deductible_debt_free_year": t("Deductible Debt-free", "可抵扣债务清偿年"),
+                    "final_wealth": t("Final Wealth", "最终财富"),
+                    "final_wealth_delta": t("Final Wealth vs Base", "最终财富较 Base 差异"),
+                    "failure_probability": t("Failure Probability", "失败概率"),
+                })
+                st.dataframe(display_debt_df, use_container_width=True, hide_index=True)
+
+                dc1, dc2 = st.columns(2)
+                with dc1:
+                    interest_fig = px.bar(
+                        debt_df,
+                        x="scenario",
+                        y="cumulative_interest",
+                        color="scenario",
+                        title=t("Cumulative Debt Interest", "累计债务利息"),
+                    )
+                    interest_fig.update_layout(showlegend=False, xaxis_title=t("Scenario", "情景"), yaxis_title=t("Interest", "利息"))
+                    st.plotly_chart(interest_fig, use_container_width=True, key="debt_strategy_interest")
+                with dc2:
+                    debt_fig = px.bar(
+                        debt_df,
+                        x="scenario",
+                        y=["ending_non_deductible_debt", "ending_deductible_debt"],
+                        barmode="stack",
+                        title=t("Ending Debt by Type", "按类别划分的期末债务"),
+                        labels={"value": t("Debt", "债务"), "variable": t("Debt Type", "债务类别")},
+                    )
+                    debt_fig.update_layout(xaxis_title=t("Scenario", "情景"), yaxis_title=t("Debt", "债务"))
+                    st.plotly_chart(debt_fig, use_container_width=True, key="debt_strategy_ending_debt")
+
+                debt_path_columns = [
+                    "financial_year_end",
+                    "non_deductible_debt_balance",
+                    "residential_property_loan_balance",
+                    "non_deductible_offset_balance",
+                    "deductible_offset_balance",
+                ]
+                path_frames = []
+                for scenario_name, result in comparison_results.items():
+                    available = [column for column in debt_path_columns if column in result["det_df"].columns]
+                    path = result["det_df"][available].copy()
+                    path["scenario"] = scenario_name
+                    path_frames.append(path)
+                if path_frames:
+                    debt_paths = pd.concat(path_frames, ignore_index=True)
+                    debt_paths["net_debt"] = (
+                        debt_paths.get("non_deductible_debt_balance", 0)
+                        + debt_paths.get("residential_property_loan_balance", 0)
+                        - debt_paths.get("non_deductible_offset_balance", 0)
+                        - debt_paths.get("deductible_offset_balance", 0)
+                    )
+                    debt_path_fig = px.line(
+                        debt_paths,
+                        x="financial_year_end",
+                        y="net_debt",
+                        color="scenario",
+                        title=t("Net Debt Projection", "净债务预测"),
+                    )
+                    debt_path_fig.update_layout(xaxis_title=t("Financial Year", "财政年度"), yaxis_title=t("Net Debt", "净债务"))
+                    st.plotly_chart(debt_path_fig, use_container_width=True, key="debt_strategy_paths")
 
         elif adviser_result_section == t("Wealth Charts", "财富图表"):
             st.subheader(t("Wealth Charts", "财富图表"))

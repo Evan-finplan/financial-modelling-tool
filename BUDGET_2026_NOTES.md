@@ -50,7 +50,7 @@ The model now includes one aggregate residential investment property with openin
 
 The interface includes scenario flags for a property acquired before Budget time, a qualifying new build, and qualifying exempt housing. These flags require adviser confirmation against the legislation and current guidance. The August 2026 amendments preserving treatment in specified death and relationship-breakdown transfers are recognised in the policy notes, but the model does not independently identify those legal events; the adviser must select the resulting applicable status.
 
-This is an aggregate, interest-only projection. Property equity is included in net wealth but is not treated as liquid funding for household spending. The model does not sell or refinance the property and does not model principal repayments, depreciation schedules, borrowing-cost amortisation, individual property disposal, transaction costs, or residential CGT.
+This is an aggregate annual projection. Property equity is included in net wealth and can be selected as a strategic funding source. The debt strategy module can allocate annual surplus to extra principal repayments or an offset, but it does not model contractual amortisation schedules. The model does not include depreciation schedules, borrowing-cost amortisation, refinancing, exact transaction costs, or residential CGT.
 
 ### Discretionary trust 30% minimum tax
 
@@ -65,7 +65,7 @@ The model does not independently test trust legal form or eligibility for every 
 The following matters remain outside the calculation engine and should not be inferred from any output:
 
 - full asset-by-asset CGT parcel records, exact statutory transition apportionment, published quarterly CPI index numbers, and tax-lot disposal ordering beyond the pooled Phase 3 estimate described below;
-- property CGT, depreciation schedules, loan principal amortisation, refinancing, purchase and sale costs, multiple properties, and entity-by-entity residential loss pools;
+- property CGT, depreciation schedules, contractual loan amortisation, refinancing, exact purchase and sale costs, multiple properties, and entity-by-entity residential loss pools;
 - complete Division 293 statutory income inputs, including reportable fringe benefits, net investment loss adjustments, defined benefit contributions, and ATO assessment reconciliation;
 - concessional contribution carry-forward eligibility and non-concessional bring-forward rules;
 - personal transfer balance account history and proportional indexation of an individual's transfer balance cap;
@@ -117,3 +117,21 @@ Phase 3 sources:
 - Treasury Laws Amendment (Tax Reform No. 1) Act 2026: https://www.legislation.gov.au/C2026A00049/asmade
 - Treasury CGT and negative gearing Tranche 2 consultation: https://consult.treasury.gov.au/c2026-792170
 - Treasury Budget tax changes overview: https://treasury.gov.au/policy-topics/taxation/budget2026-27
+
+## Strategy comparison and asset drawdown release
+
+The application can compare a common set of economic assumptions across Base Case and Strategy A/B/C asset drawdown profiles. The comparison reports cumulative after-tax cashflow, wealth at Person 1's retirement, deterministic and simulated final wealth, failure probability, cumulative tax, first advantage year, break-even year and modelled risk observations.
+
+Annual cash shortfalls can be funded in a selected order from cash reserves, the pooled non-super investment account, pension balances, accumulation super and residential property equity. Cash, non-super and property estate reserve floors are respected where sufficient alternative assets are available. Partial property disposals proportionally reduce modelled property value and associated debt after estimated selling costs.
+
+This remains strategic modelling rather than transaction or tax-return calculation. The property disposal estimate does not include property CGT, exact conveyancing costs, lender requirements, legal feasibility of partial disposal, ownership restructuring, stamp duty or transaction-specific tax advice. Super withdrawals must also be reviewed against preservation and conditions-of-release requirements before an adviser relies on a strategy result.
+
+PDF reports are available as Client Summary, Advice Support Report and Technical Appendix. The longer formats add strategy outcomes, key risks, assumption changes, adviser notes, policy status, calculation methodology and reconciliation disclosures.
+
+## Debt strategy comparison
+
+The model separately tracks private-purpose non-deductible debt and the deductible investment-property loan. It calculates interest on each net of the linked offset balance. Non-deductible interest is treated as a household cash outflow; investment-property interest continues through the residential property tax calculation.
+
+Annual cash surplus can be directed in a selected order to the cash reserve, non-deductible offset, non-deductible principal, deductible offset, deductible principal or the pooled non-super investment account. Debt comparison mode evaluates the current selection against non-deductible-first, offset-first, deductible-first and invest-surplus strategies, including cumulative interest, tax, ending debt, offset liquidity, debt-free timing, final wealth and failure probability.
+
+Deductibility depends on the use of borrowed funds rather than the security. The comparison does not determine legal deductibility or model daily interest, minimum contractual repayments, loan fees, fixed-rate break costs, refinance costs, redraw contamination, lender serviceability or whether extra repayments remain redrawable. Actual loan statements and tax records must be reviewed before advice is implemented.

@@ -1,6 +1,6 @@
 # Retirement Modelling Suite (Australia)
 
-A Streamlit-based financial modelling tool for analysing retirement outcomes under Australian superannuation and tax rules.
+A Streamlit-based financial modelling tool for analysing retirement, superannuation, tax, asset drawdown and debt-strategy outcomes under Australian rules.
 
 ---
 
@@ -21,6 +21,10 @@ A Streamlit-based financial modelling tool for analysing retirement outcomes und
 - Adviser View / Client View
 - Excel export (inputs, assumptions, debug tables)
 - One-click PDF report export with selectable charts, future outlook, milestone commentary, and chart explanations
+- Strategy comparison for Base Case and Strategy A/B/C, including after-tax cashflow, retirement wealth, final wealth, failure probability, cumulative tax, advantage timing, break-even year and key risks
+- Configurable asset drawdown order across cash, non-super investments, pension, accumulation super and residential property equity, with estate reserve floors
+- Debt strategy modelling for non-deductible debt and deductible investment-property debt, including separate offsets, annual interest, surplus allocation, extra principal repayments, debt-free timing and side-by-side comparison
+- Three PDF detail levels: Client Summary, Advice Support Report and Technical Appendix
 - Editable assumption presets
 - Bilingual interface (English / 中文)
 
@@ -37,6 +41,7 @@ A Streamlit-based financial modelling tool for analysing retirement outcomes und
 - Division 293 tax estimate for high-income clients
 - 2026-27 SG maximum earnings base and indexed super caps
 - Residential investment property cashflow and legislated negative-gearing loss quarantine
+- Deductible and non-deductible debt, linked offset balances, cash-surplus allocation and repayment-strategy comparison
 - Discretionary trust 30% minimum-tax policy scenario (exposure draft; not enacted)
 - Retirement income sustainability
 

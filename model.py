@@ -3,6 +3,7 @@ import copy
 import numpy as np
 import pandas as pd
 
+from debt_analysis import allocate_cash_surplus
 from policy import (
     CGT_CORE_POLICY_STATUS,
     CGT_MINIMUM_TAX_RATE,
@@ -739,6 +740,101 @@ def allocate_household_extra_super_withdrawal(
     }
 
 
+def allocate_shortfall_by_asset_order(
+    required_amount,
+    withdrawal_order,
+    cash_balance,
+    cash_floor,
+    non_super_balance,
+    non_super_floor,
+    person1_accum_balance,
+    person2_accum_balance,
+    person1_pension_balance,
+    person2_pension_balance,
+    property_value=0.0,
+    property_loan_balance=0.0,
+    property_equity_floor=0.0,
+    property_sale_cost_rate=0.0,
+):
+    """Allocate a cash shortfall across nominated asset sources.
+
+    Property proceeds are an annual strategic estimate. A partial disposal
+    proportionally reduces both the property value and its associated loan.
+    Property CGT is deliberately excluded pending asset-level cost-base inputs.
+    """
+    remaining = max(float(required_amount), 0.0)
+    order = list(withdrawal_order or ["cash", "non_super", "accumulation", "pension", "property"])
+    valid_sources = ["cash", "non_super", "accumulation", "pension", "property"]
+    order = [source for source in order if source in valid_sources]
+    order.extend(source for source in valid_sources if source not in order)
+
+    cash_available = max(float(cash_balance) - max(float(cash_floor), 0.0), 0.0)
+    non_super_available = max(float(non_super_balance) - max(float(non_super_floor), 0.0), 0.0)
+    accum_balances = [max(float(person1_accum_balance), 0.0), max(float(person2_accum_balance), 0.0)]
+    pension_balances = [max(float(person1_pension_balance), 0.0), max(float(person2_pension_balance), 0.0)]
+    property_value = max(float(property_value), 0.0)
+    property_loan_balance = min(max(float(property_loan_balance), 0.0), property_value)
+    sale_cost_rate = min(max(float(property_sale_cost_rate), 0.0), 0.25)
+    property_net_equity = max(property_value * (1.0 - sale_cost_rate) - property_loan_balance, 0.0)
+    property_available = max(property_net_equity - max(float(property_equity_floor), 0.0), 0.0)
+
+    result = {
+        "cash_withdrawal": 0.0,
+        "non_super_withdrawal": 0.0,
+        "person1_extra_accum_withdrawal": 0.0,
+        "person2_extra_accum_withdrawal": 0.0,
+        "person1_extra_pension_withdrawal": 0.0,
+        "person2_extra_pension_withdrawal": 0.0,
+        "residential_property_sale_proceeds": 0.0,
+        "residential_property_disposal_fraction": 0.0,
+    }
+
+    for source in order:
+        if remaining <= 0:
+            break
+        if source == "cash":
+            amount = min(remaining, cash_available)
+            result["cash_withdrawal"] += amount
+            remaining -= amount
+        elif source == "non_super":
+            amount = min(remaining, non_super_available)
+            result["non_super_withdrawal"] += amount
+            remaining -= amount
+        elif source in {"accumulation", "pension"}:
+            balances = accum_balances if source == "accumulation" else pension_balances
+            total_available = sum(balances)
+            amount = min(remaining, total_available)
+            if total_available > 0 and amount > 0:
+                p1_amount = amount * balances[0] / total_available
+                p2_amount = amount - p1_amount
+                if source == "accumulation":
+                    result["person1_extra_accum_withdrawal"] += p1_amount
+                    result["person2_extra_accum_withdrawal"] += p2_amount
+                else:
+                    result["person1_extra_pension_withdrawal"] += p1_amount
+                    result["person2_extra_pension_withdrawal"] += p2_amount
+                remaining -= amount
+        elif source == "property":
+            amount = min(remaining, property_available)
+            result["residential_property_sale_proceeds"] += amount
+            if property_net_equity > 0:
+                result["residential_property_disposal_fraction"] = min(amount / property_net_equity, 1.0)
+            remaining -= amount
+
+    disposal_fraction = result["residential_property_disposal_fraction"]
+    result["ending_cash_reserve_balance"] = max(float(cash_balance) - result["cash_withdrawal"], 0.0)
+    result["remaining_residential_property_value"] = property_value * (1.0 - disposal_fraction)
+    result["remaining_residential_property_loan_balance"] = property_loan_balance * (1.0 - disposal_fraction)
+    result["total_extra_super_withdrawal"] = (
+        result["person1_extra_accum_withdrawal"]
+        + result["person2_extra_accum_withdrawal"]
+        + result["person1_extra_pension_withdrawal"]
+        + result["person2_extra_pension_withdrawal"]
+    )
+    result["unfunded_after_assets"] = remaining
+    return result
+
+
 def calculate_super_account_earnings_tax(accum_balance_before_return, pension_balance_before_return, return_rate, transfer_balance_cap):
     accum_balance_before_return = float(accum_balance_before_return)
     pension_balance_before_return = float(pension_balance_before_return)
@@ -957,6 +1053,43 @@ def validate_inputs(inputs):
     if inputs["non_super_cost_base"] > inputs["non_super_balance"] + 1e-9:
         errors.append("non_super_cost_base cannot exceed non_super_balance under the current average-cost setup.")
 
+    for field in [
+        "cash_reserve_balance",
+        "cash_reserve_floor",
+        "cash_reserve_target",
+        "non_super_estate_reserve",
+        "property_estate_reserve",
+        "non_deductible_debt_balance",
+        "non_deductible_offset_balance",
+        "deductible_offset_balance",
+    ]:
+        if float(inputs.get(field, 0.0)) < 0:
+            errors.append(f"{field} cannot be negative.")
+    if float(inputs.get("non_deductible_interest_rate", 0.0)) < 0:
+        errors.append("non_deductible_interest_rate cannot be negative.")
+    if float(inputs.get("non_deductible_offset_balance", 0.0)) > float(inputs.get("non_deductible_debt_balance", 0.0)):
+        errors.append("non_deductible_offset_balance cannot exceed non_deductible_debt_balance.")
+    if float(inputs.get("deductible_offset_balance", 0.0)) > float(inputs.get("residential_property_loan_balance", 0.0)):
+        errors.append("deductible_offset_balance cannot exceed residential_property_loan_balance.")
+    valid_surplus_destinations = {
+        "cash_reserve",
+        "non_deductible_offset",
+        "non_deductible_repayment",
+        "deductible_offset",
+        "deductible_repayment",
+        "non_super",
+    }
+    surplus_order = inputs.get("surplus_allocation_order", ["non_super"])
+    if not isinstance(surplus_order, (list, tuple)) or set(surplus_order) - valid_surplus_destinations:
+        errors.append("surplus_allocation_order contains an unrecognised destination.")
+    sale_cost_rate = float(inputs.get("residential_property_sale_cost_rate", 0.0))
+    if not 0.0 <= sale_cost_rate <= 0.25:
+        errors.append("residential_property_sale_cost_rate must be between 0% and 25%.")
+    withdrawal_order = inputs.get("withdrawal_order", [])
+    valid_withdrawal_sources = {"cash", "non_super", "pension", "accumulation", "property"}
+    if not isinstance(withdrawal_order, (list, tuple)) or set(withdrawal_order) - valid_withdrawal_sources:
+        errors.append("withdrawal_order contains an unrecognised asset source.")
+
     try:
         parse_financial_year_label(inputs["start_financial_year"])
     except Exception:
@@ -1010,8 +1143,23 @@ def generate_input_warnings(inputs):
             warnings.append(
                 "Residential rental losses are quarantined from 2027-28 under the modelled legislated rule and carried forward against future residential income."
             )
+        if "property" in inputs.get("withdrawal_order", []):
+            warnings.append(
+                "Residential property sale proceeds are an annual strategic estimate. Partial disposals proportionally reduce value and debt after estimated selling costs; legal feasibility, refinancing requirements, transaction-specific costs, and property CGT are not modelled."
+            )
+        else:
+            warnings.append(
+                "Residential property modelling is an aggregate projection. Property equity is included in net wealth but is not sold or refinanced to fund spending unless the property source is selected; scheduled loan amortisation, depreciation schedules, sale costs outside a disposal strategy, and property CGT are not modelled."
+            )
+
+    if float(inputs.get("non_deductible_debt_balance", 0.0)) > 0 or float(inputs.get("residential_property_loan_balance", 0.0)) > 0:
         warnings.append(
-            "Residential property modelling is an aggregate, interest-only projection. Property equity is included in net wealth but is not sold or refinanced to fund spending; principal repayments, depreciation schedules, sale costs, and property CGT are not modelled."
+            "Debt strategies are annual cashflow estimates. Deductibility depends on the use of borrowed funds, not the security; confirm loan purpose, offset/redraw structure, refinancing terms and lender requirements before relying on the comparison."
+        )
+
+    if any(source in inputs.get("withdrawal_order", []) for source in ["accumulation", "pension"]):
+        warnings.append(
+            "The selected drawdown order is a strategic funding assumption. Confirm preservation age, retirement status and all conditions of release before relying on a super withdrawal result."
         )
 
     if inputs.get("discretionary_trust_enabled", False):
@@ -1570,6 +1718,20 @@ def solve_cashflow_before_returns(
     cgt_new_residential_method,
     cgt_held_at_least_12_months,
     cgt_reform_enabled,
+    opening_cash_reserve_balance=0.0,
+    cash_reserve_floor=0.0,
+    withdrawal_order=None,
+    non_super_estate_reserve=0.0,
+    opening_residential_property_value=0.0,
+    opening_residential_property_loan_balance=0.0,
+    property_estate_reserve=0.0,
+    residential_property_sale_cost_rate=0.0,
+    opening_non_deductible_debt_balance=0.0,
+    opening_non_deductible_offset_balance=0.0,
+    opening_deductible_offset_balance=0.0,
+    non_deductible_interest_expense=0.0,
+    cash_reserve_target=0.0,
+    surplus_allocation_order=None,
 ):
     opening_non_super_balance = max(float(opening_non_super_balance), 0.0)
     opening_non_super_cost_base = max(float(opening_non_super_cost_base), 0.0)
@@ -1612,7 +1774,11 @@ def solve_cashflow_before_returns(
         household_salary_net_income + household_minimum_pension_drawdown
     )
 
-    required_cash_outflow = current_spending + total_cash_contributions
+    required_cash_outflow = (
+        current_spending
+        + total_cash_contributions
+        + max(float(non_deductible_interest_expense), 0.0)
+    )
 
     non_super_withdrawal = 0.0
     surplus_cash_to_non_super = 0.0
@@ -1623,31 +1789,105 @@ def solve_cashflow_before_returns(
     person2_extra_pension_withdrawal = 0.0
     total_extra_super_withdrawal = 0.0
     unmet_shortfall = 0.0
+    cash_reserve_withdrawal = 0.0
+    ending_cash_reserve_balance = max(float(opening_cash_reserve_balance), 0.0)
+    residential_property_sale_proceeds = 0.0
+    residential_property_disposal_fraction = 0.0
+    remaining_residential_property_value = max(float(opening_residential_property_value), 0.0)
+    remaining_residential_property_loan_balance = max(float(opening_residential_property_loan_balance), 0.0)
+    remaining_non_deductible_debt_balance = max(float(opening_non_deductible_debt_balance), 0.0)
+    ending_non_deductible_offset_balance = min(
+        max(float(opening_non_deductible_offset_balance), 0.0),
+        remaining_non_deductible_debt_balance,
+    )
+    ending_deductible_offset_balance = min(
+        max(float(opening_deductible_offset_balance), 0.0),
+        remaining_residential_property_loan_balance,
+    )
+    cash_reserve_top_up = 0.0
+    non_deductible_offset_contribution = 0.0
+    non_deductible_principal_repayment = 0.0
+    deductible_offset_contribution = 0.0
+    deductible_principal_repayment = 0.0
+    non_deductible_offset_withdrawal = 0.0
+    deductible_offset_withdrawal = 0.0
 
     if household_cash_available_before_extra_withdrawals >= required_cash_outflow:
-        surplus_cash_to_non_super = (
+        annual_surplus = (
             household_cash_available_before_extra_withdrawals - required_cash_outflow
         )
+        surplus_result = allocate_cash_surplus(
+            surplus=annual_surplus,
+            allocation_order=surplus_allocation_order or ["non_super"],
+            cash_reserve_balance=opening_cash_reserve_balance,
+            cash_reserve_target=cash_reserve_target,
+            non_deductible_debt_balance=remaining_non_deductible_debt_balance,
+            non_deductible_offset_balance=ending_non_deductible_offset_balance,
+            deductible_debt_balance=remaining_residential_property_loan_balance,
+            deductible_offset_balance=ending_deductible_offset_balance,
+        )
+        surplus_cash_to_non_super = surplus_result["surplus_cash_to_non_super"]
+        ending_cash_reserve_balance = surplus_result["ending_cash_reserve_balance"]
+        remaining_non_deductible_debt_balance = surplus_result["ending_non_deductible_debt_balance"]
+        ending_non_deductible_offset_balance = surplus_result["ending_non_deductible_offset_balance"]
+        remaining_residential_property_loan_balance = surplus_result["ending_deductible_debt_balance"]
+        ending_deductible_offset_balance = surplus_result["ending_deductible_offset_balance"]
+        cash_reserve_top_up = surplus_result["cash_reserve_top_up"]
+        non_deductible_offset_contribution = surplus_result["non_deductible_offset_contribution"]
+        non_deductible_principal_repayment = surplus_result["non_deductible_principal_repayment"]
+        deductible_offset_contribution = surplus_result["deductible_offset_contribution"]
+        deductible_principal_repayment = surplus_result["deductible_principal_repayment"]
     else:
         cash_shortfall = required_cash_outflow - household_cash_available_before_extra_withdrawals
 
-        non_super_withdrawal = min(cash_shortfall, opening_non_super_balance)
-        remaining_shortfall = cash_shortfall - non_super_withdrawal
+        accessible_cash_balance = (
+            max(float(opening_cash_reserve_balance), 0.0)
+            + ending_non_deductible_offset_balance
+            + ending_deductible_offset_balance
+        )
 
-        extra_super_result = allocate_household_extra_super_withdrawal(
-            required_amount=remaining_shortfall,
+        allocation = allocate_shortfall_by_asset_order(
+            required_amount=cash_shortfall,
+            withdrawal_order=withdrawal_order,
+            cash_balance=accessible_cash_balance,
+            cash_floor=cash_reserve_floor,
+            non_super_balance=opening_non_super_balance,
+            non_super_floor=non_super_estate_reserve,
             person1_accum_balance=person1_accum_after_transfer,
             person2_accum_balance=person2_accum_after_transfer,
             person1_pension_balance=person1_pension_after_minimum,
             person2_pension_balance=person2_pension_after_minimum,
+            property_value=opening_residential_property_value,
+            property_loan_balance=opening_residential_property_loan_balance,
+            property_equity_floor=property_estate_reserve,
+            property_sale_cost_rate=residential_property_sale_cost_rate,
         )
 
-        person1_extra_accum_withdrawal = extra_super_result["person1_extra_accum_withdrawal"]
-        person2_extra_accum_withdrawal = extra_super_result["person2_extra_accum_withdrawal"]
-        person1_extra_pension_withdrawal = extra_super_result["person1_extra_pension_withdrawal"]
-        person2_extra_pension_withdrawal = extra_super_result["person2_extra_pension_withdrawal"]
-        total_extra_super_withdrawal = extra_super_result["total_extra_super_withdrawal"]
-        unmet_shortfall = extra_super_result["unfunded_after_super"]
+        cash_reserve_withdrawal = allocation["cash_withdrawal"]
+        ordinary_cash_available = max(float(opening_cash_reserve_balance) - float(cash_reserve_floor), 0.0)
+        ordinary_cash_withdrawal = min(cash_reserve_withdrawal, ordinary_cash_available)
+        offset_withdrawal_remaining = max(cash_reserve_withdrawal - ordinary_cash_withdrawal, 0.0)
+        non_deductible_offset_withdrawal = min(offset_withdrawal_remaining, ending_non_deductible_offset_balance)
+        ending_non_deductible_offset_balance -= non_deductible_offset_withdrawal
+        offset_withdrawal_remaining -= non_deductible_offset_withdrawal
+        deductible_offset_withdrawal = min(offset_withdrawal_remaining, ending_deductible_offset_balance)
+        ending_deductible_offset_balance -= deductible_offset_withdrawal
+        ending_cash_reserve_balance = max(float(opening_cash_reserve_balance) - ordinary_cash_withdrawal, 0.0)
+        non_super_withdrawal = allocation["non_super_withdrawal"]
+        person1_extra_accum_withdrawal = allocation["person1_extra_accum_withdrawal"]
+        person2_extra_accum_withdrawal = allocation["person2_extra_accum_withdrawal"]
+        person1_extra_pension_withdrawal = allocation["person1_extra_pension_withdrawal"]
+        person2_extra_pension_withdrawal = allocation["person2_extra_pension_withdrawal"]
+        total_extra_super_withdrawal = allocation["total_extra_super_withdrawal"]
+        residential_property_sale_proceeds = allocation["residential_property_sale_proceeds"]
+        residential_property_disposal_fraction = allocation["residential_property_disposal_fraction"]
+        remaining_residential_property_value = allocation["remaining_residential_property_value"]
+        remaining_residential_property_loan_balance = allocation["remaining_residential_property_loan_balance"]
+        ending_deductible_offset_balance = min(
+            ending_deductible_offset_balance,
+            remaining_residential_property_loan_balance,
+        )
+        unmet_shortfall = allocation["unfunded_after_assets"]
 
     # ---------- Non-super withdrawal CGT ----------
     non_super_sale_result = calculate_budget_cgt_on_sale(
@@ -1781,6 +2021,19 @@ def solve_cashflow_before_returns(
         "required_cash_outflow": required_cash_outflow,
         "total_cash_contributions": total_cash_contributions,
         "surplus_cash_to_non_super": surplus_cash_to_non_super,
+        "cash_reserve_top_up": cash_reserve_top_up,
+        "cash_reserve_withdrawal": cash_reserve_withdrawal,
+        "ending_cash_reserve_balance": ending_cash_reserve_balance,
+        "non_deductible_interest_expense": max(float(non_deductible_interest_expense), 0.0),
+        "non_deductible_offset_contribution": non_deductible_offset_contribution,
+        "non_deductible_offset_withdrawal": non_deductible_offset_withdrawal,
+        "non_deductible_principal_repayment": non_deductible_principal_repayment,
+        "ending_non_deductible_debt_balance": remaining_non_deductible_debt_balance,
+        "ending_non_deductible_offset_balance": ending_non_deductible_offset_balance,
+        "deductible_offset_contribution": deductible_offset_contribution,
+        "deductible_offset_withdrawal": deductible_offset_withdrawal,
+        "deductible_principal_repayment": deductible_principal_repayment,
+        "ending_deductible_offset_balance": ending_deductible_offset_balance,
         "non_super_withdrawal": non_super_withdrawal,
         "non_super_cost_base_after_withdrawal": non_super_cost_base_after_withdrawal,
         "non_super_cost_base_before_return": non_super_cost_base_before_return,
@@ -1804,6 +2057,10 @@ def solve_cashflow_before_returns(
         "person1_extra_pension_withdrawal": person1_extra_pension_withdrawal,
         "person2_extra_pension_withdrawal": person2_extra_pension_withdrawal,
         "total_extra_super_withdrawal": total_extra_super_withdrawal,
+        "residential_property_sale_proceeds": residential_property_sale_proceeds,
+        "residential_property_disposal_fraction": residential_property_disposal_fraction,
+        "remaining_residential_property_value": remaining_residential_property_value,
+        "remaining_residential_property_loan_balance": remaining_residential_property_loan_balance,
         "unmet_shortfall": unmet_shortfall,
         "person1_accum_before_return": person1_accum_before_return,
         "person2_accum_before_return": person2_accum_before_return,
@@ -1858,6 +2115,11 @@ def run_one_year(
     opening_non_super_indexed_cost_base=0.0,
     opening_non_super_deferred_pre_2027_gain=0.0,
     opening_non_super_capital_losses=0.0,
+    opening_cash_reserve_balance=0.0,
+    opening_residential_property_loan_balance=None,
+    opening_non_deductible_debt_balance=None,
+    opening_non_deductible_offset_balance=None,
+    opening_deductible_offset_balance=None,
 ):
     year_index = year_context["year_index"]
     financial_year_end = year_context["financial_year_end"]
@@ -2010,29 +2272,63 @@ def run_one_year(
         phase=person2_super_phase_for_transfer,
     )
 
-    residential_property_enabled = bool(inputs.get("residential_property_enabled", False))
+    residential_property_enabled = bool(inputs.get("residential_property_enabled", False)) and float(opening_residential_property_value) > 0
+    original_property_value = max(float(inputs.get("residential_property_value", 0.0)), 0.0)
+    property_scale = (
+        min(max(float(opening_residential_property_value) / original_property_value, 0.0), 1.0)
+        if original_property_value > 0 else 0.0
+    )
     property_ownership_person1 = (
         1.0 if is_one_person_mode(inputs)
         else min(max(float(inputs.get("residential_property_ownership_person1", 0.5)), 0.0), 1.0)
     )
     property_ownership_person2 = 1.0 - property_ownership_person1
     property_gross_rent = (
-        float(inputs.get("residential_property_gross_rent", 0.0))
+        float(inputs.get("residential_property_gross_rent", 0.0)) * property_scale
         * ((1 + float(inputs.get("residential_property_rent_growth_rate", inputs.get("inflation_rate", 0.0)))) ** year_index)
         if residential_property_enabled else 0.0
     )
     property_operating_expenses = (
-        float(inputs.get("residential_property_operating_expenses", 0.0))
+        float(inputs.get("residential_property_operating_expenses", 0.0)) * property_scale
         * ((1 + float(inputs.get("residential_property_expense_growth_rate", inputs.get("inflation_rate", 0.0)))) ** year_index)
         if residential_property_enabled else 0.0
     )
     property_loan_balance = (
-        max(float(inputs.get("residential_property_loan_balance", 0.0)), 0.0)
+        max(float(
+            inputs.get("residential_property_loan_balance", 0.0)
+            if opening_residential_property_loan_balance is None
+            else opening_residential_property_loan_balance
+        ), 0.0)
         if residential_property_enabled else 0.0
     )
-    property_loan_interest = property_loan_balance * max(
+    deductible_offset_balance = min(
+        max(float(
+            inputs.get("deductible_offset_balance", 0.0)
+            if opening_deductible_offset_balance is None
+            else opening_deductible_offset_balance
+        ), 0.0),
+        property_loan_balance,
+    )
+    property_loan_interest = max(property_loan_balance - deductible_offset_balance, 0.0) * max(
         float(inputs.get("residential_property_interest_rate", 0.0)), 0.0
     )
+    non_deductible_debt_balance = max(float(
+        inputs.get("non_deductible_debt_balance", 0.0)
+        if opening_non_deductible_debt_balance is None
+        else opening_non_deductible_debt_balance
+    ), 0.0)
+    non_deductible_offset_balance = min(
+        max(float(
+            inputs.get("non_deductible_offset_balance", 0.0)
+            if opening_non_deductible_offset_balance is None
+            else opening_non_deductible_offset_balance
+        ), 0.0),
+        non_deductible_debt_balance,
+    )
+    non_deductible_interest_expense = max(
+        non_deductible_debt_balance - non_deductible_offset_balance,
+        0.0,
+    ) * max(float(inputs.get("non_deductible_interest_rate", 0.0)), 0.0)
     residential_result = calculate_residential_property_year(
         gross_rent=property_gross_rent,
         deductible_operating_expenses=property_operating_expenses,
@@ -2200,6 +2496,20 @@ def run_one_year(
             cgt_new_residential_method=inputs.get("cgt_new_residential_method", "Indexation and 30% minimum tax"),
             cgt_held_at_least_12_months=inputs.get("cgt_held_at_least_12_months", True),
             cgt_reform_enabled=inputs.get("cgt_reform_enabled", True),
+            opening_cash_reserve_balance=opening_cash_reserve_balance,
+            cash_reserve_floor=inputs.get("cash_reserve_floor", 0.0),
+            withdrawal_order=inputs.get("withdrawal_order"),
+            non_super_estate_reserve=inputs.get("non_super_estate_reserve", 0.0),
+            opening_residential_property_value=opening_residential_property_value,
+            opening_residential_property_loan_balance=property_loan_balance,
+            property_estate_reserve=inputs.get("property_estate_reserve", 0.0),
+            residential_property_sale_cost_rate=inputs.get("residential_property_sale_cost_rate", 0.0),
+            opening_non_deductible_debt_balance=non_deductible_debt_balance,
+            opening_non_deductible_offset_balance=non_deductible_offset_balance,
+            opening_deductible_offset_balance=deductible_offset_balance,
+            non_deductible_interest_expense=non_deductible_interest_expense,
+            cash_reserve_target=inputs.get("cash_reserve_target", inputs.get("cash_reserve_floor", 0.0)),
+            surplus_allocation_order=inputs.get("surplus_allocation_order", ["non_super"]),
         )
 
         taxable_non_super_guess = max(
@@ -2209,6 +2519,15 @@ def run_one_year(
         minimum_tax_capital_gain_guess = max(
             cashflow["non_super_minimum_tax_capital_gain"], 0.0
         )
+
+    ending_residential_property_value = (
+        cashflow["remaining_residential_property_value"] * (1 + property_growth_rate)
+        if residential_property_enabled else 0.0
+    )
+    ending_residential_property_loan_balance = cashflow["remaining_residential_property_loan_balance"]
+    ending_non_deductible_debt_balance = cashflow["ending_non_deductible_debt_balance"]
+    ending_non_deductible_offset_balance = cashflow["ending_non_deductible_offset_balance"]
+    ending_deductible_offset_balance = cashflow["ending_deductible_offset_balance"]
 
     total_super_return_rate = super_income_return_rate + super_capital_return_rate
 
@@ -2379,8 +2698,16 @@ def run_one_year(
         + total_super_earnings_tax
         + total_super_withdrawal_cgt_tax
     )
-    residential_property_net_equity = ending_residential_property_value - property_loan_balance
-    total_wealth = total_super_balance + ending_non_super_balance + residential_property_net_equity
+    residential_property_net_equity = ending_residential_property_value - ending_residential_property_loan_balance
+    total_wealth = (
+        total_super_balance
+        + ending_non_super_balance
+        + cashflow["ending_cash_reserve_balance"]
+        + ending_non_deductible_offset_balance
+        + ending_deductible_offset_balance
+        + residential_property_net_equity
+        - ending_non_deductible_debt_balance
+    )
 
     person1_net_income = (
         person1_gross_income
@@ -2450,6 +2777,7 @@ def run_one_year(
         "residential_property_gross_rent": residential_result["gross_rent"],
         "residential_property_operating_expenses": residential_result["deductible_operating_expenses"],
         "residential_property_loan_interest": residential_result["loan_interest"],
+        "deductible_debt_interest": residential_result["loan_interest"],
         "residential_property_total_deductions": residential_result["total_deductions"],
         "residential_property_net_cashflow": residential_result["net_cashflow"],
         "residential_property_taxable_income": residential_result["taxable_rental_income"],
@@ -2458,9 +2786,17 @@ def run_one_year(
         "opening_residential_property_quarantined_loss": residential_result["opening_quarantined_loss"],
         "closing_residential_property_quarantined_loss": residential_result["closing_quarantined_loss"],
         "opening_residential_property_value": opening_residential_property_value,
+        "opening_residential_property_loan_balance": property_loan_balance,
+        "opening_non_deductible_debt_balance": non_deductible_debt_balance,
+        "opening_non_deductible_offset_balance": non_deductible_offset_balance,
+        "opening_deductible_offset_balance": deductible_offset_balance,
         "ending_residential_property_value": ending_residential_property_value,
-        "residential_property_loan_balance": property_loan_balance,
+        "residential_property_loan_balance": ending_residential_property_loan_balance,
+        "deductible_offset_balance": ending_deductible_offset_balance,
+        "deductible_principal_repayment": cashflow["deductible_principal_repayment"],
         "residential_property_net_equity": residential_property_net_equity,
+        "residential_property_sale_proceeds": cashflow["residential_property_sale_proceeds"],
+        "residential_property_disposal_fraction": cashflow["residential_property_disposal_fraction"],
         "discretionary_trust_enabled": discretionary_trust_enabled,
         "discretionary_trust_net_income": trust_result["trust_net_income"],
         "discretionary_trust_excluded_income": trust_result["excluded_income"],
@@ -2520,6 +2856,23 @@ def run_one_year(
         "required_cash_outflow": cashflow["required_cash_outflow"],
         "total_cash_contributions": cashflow["total_cash_contributions"],
         "surplus_cash_to_non_super": cashflow["surplus_cash_to_non_super"],
+        "cash_reserve_top_up": cashflow["cash_reserve_top_up"],
+        "opening_cash_reserve_balance": opening_cash_reserve_balance,
+        "cash_reserve_withdrawal": cashflow["cash_reserve_withdrawal"],
+        "ending_cash_reserve_balance": cashflow["ending_cash_reserve_balance"],
+        "non_deductible_debt_interest": non_deductible_interest_expense,
+        "non_deductible_debt_balance": ending_non_deductible_debt_balance,
+        "non_deductible_offset_balance": ending_non_deductible_offset_balance,
+        "non_deductible_offset_contribution": cashflow["non_deductible_offset_contribution"],
+        "non_deductible_offset_withdrawal": cashflow["non_deductible_offset_withdrawal"],
+        "non_deductible_principal_repayment": cashflow["non_deductible_principal_repayment"],
+        "deductible_offset_contribution": cashflow["deductible_offset_contribution"],
+        "deductible_offset_withdrawal": cashflow["deductible_offset_withdrawal"],
+        "total_debt_interest": residential_result["loan_interest"] + non_deductible_interest_expense,
+        "debt_strategy": inputs.get("debt_strategy_name", "Custom"),
+        "surplus_allocation_order": " > ".join(inputs.get("surplus_allocation_order", [])),
+        "withdrawal_strategy": inputs.get("strategy_name", "Custom"),
+        "withdrawal_order": " > ".join(inputs.get("withdrawal_order", [])),
         "non_super_withdrawal": cashflow["non_super_withdrawal"],
         "non_super_sale_cost_base_reduction": cashflow["non_super_sale_cost_base_reduction"],
         "non_super_realised_capital_gain": cashflow["non_super_realised_capital_gain"],
@@ -2680,6 +3033,20 @@ def run_deterministic_projection(inputs):
     current_residential_quarantined_loss = max(
         float(inputs.get("residential_property_opening_quarantined_loss", 0.0)), 0.0
     )
+    current_cash_reserve_balance = max(float(inputs.get("cash_reserve_balance", 0.0)), 0.0)
+    current_residential_property_loan_balance = (
+        max(float(inputs.get("residential_property_loan_balance", 0.0)), 0.0)
+        if inputs.get("residential_property_enabled", False) else 0.0
+    )
+    current_non_deductible_debt_balance = max(float(inputs.get("non_deductible_debt_balance", 0.0)), 0.0)
+    current_non_deductible_offset_balance = min(
+        max(float(inputs.get("non_deductible_offset_balance", 0.0)), 0.0),
+        current_non_deductible_debt_balance,
+    )
+    current_deductible_offset_balance = min(
+        max(float(inputs.get("deductible_offset_balance", 0.0)), 0.0),
+        current_residential_property_loan_balance,
+    )
 
     person1_has_started_pension = inputs["person1_pension_super_balance"] > 0
     person2_has_started_pension = inputs["person2_pension_super_balance"] > 0
@@ -2719,6 +3086,11 @@ def run_deterministic_projection(inputs):
             opening_non_super_indexed_cost_base=current_non_super_indexed_cost_base,
             opening_non_super_deferred_pre_2027_gain=current_non_super_deferred_pre_2027_gain,
             opening_non_super_capital_losses=current_non_super_capital_losses,
+            opening_cash_reserve_balance=current_cash_reserve_balance,
+            opening_residential_property_loan_balance=current_residential_property_loan_balance,
+            opening_non_deductible_debt_balance=current_non_deductible_debt_balance,
+            opening_non_deductible_offset_balance=current_non_deductible_offset_balance,
+            opening_deductible_offset_balance=current_deductible_offset_balance,
         )
 
         results.append(result)
@@ -2739,7 +3111,12 @@ def run_deterministic_projection(inputs):
         current_non_super_deferred_pre_2027_gain = result["ending_non_super_deferred_pre_2027_gain"]
         current_non_super_capital_losses = result["ending_non_super_capital_losses"]
         current_residential_property_value = result["ending_residential_property_value"]
+        current_residential_property_loan_balance = result["residential_property_loan_balance"]
         current_residential_quarantined_loss = result["closing_residential_property_quarantined_loss"]
+        current_cash_reserve_balance = result["ending_cash_reserve_balance"]
+        current_non_deductible_debt_balance = result["non_deductible_debt_balance"]
+        current_non_deductible_offset_balance = result["non_deductible_offset_balance"]
+        current_deductible_offset_balance = result["deductible_offset_balance"]
 
         person1_has_started_pension = result["person1_has_started_pension"]
         person2_has_started_pension = result["person2_has_started_pension"]
@@ -2798,6 +3175,20 @@ def run_single_simulation(inputs, rng, contribution_event_lookup, projection_con
     current_residential_quarantined_loss = max(
         float(inputs.get("residential_property_opening_quarantined_loss", 0.0)), 0.0
     )
+    current_cash_reserve_balance = max(float(inputs.get("cash_reserve_balance", 0.0)), 0.0)
+    current_residential_property_loan_balance = (
+        max(float(inputs.get("residential_property_loan_balance", 0.0)), 0.0)
+        if inputs.get("residential_property_enabled", False) else 0.0
+    )
+    current_non_deductible_debt_balance = max(float(inputs.get("non_deductible_debt_balance", 0.0)), 0.0)
+    current_non_deductible_offset_balance = min(
+        max(float(inputs.get("non_deductible_offset_balance", 0.0)), 0.0),
+        current_non_deductible_debt_balance,
+    )
+    current_deductible_offset_balance = min(
+        max(float(inputs.get("deductible_offset_balance", 0.0)), 0.0),
+        current_residential_property_loan_balance,
+    )
 
     person1_has_started_pension = inputs["person1_pension_super_balance"] > 0
     person2_has_started_pension = inputs["person2_pension_super_balance"] > 0
@@ -2851,6 +3242,11 @@ def run_single_simulation(inputs, rng, contribution_event_lookup, projection_con
             opening_non_super_indexed_cost_base=current_non_super_indexed_cost_base,
             opening_non_super_deferred_pre_2027_gain=current_non_super_deferred_pre_2027_gain,
             opening_non_super_capital_losses=current_non_super_capital_losses,
+            opening_cash_reserve_balance=current_cash_reserve_balance,
+            opening_residential_property_loan_balance=current_residential_property_loan_balance,
+            opening_non_deductible_debt_balance=current_non_deductible_debt_balance,
+            opening_non_deductible_offset_balance=current_non_deductible_offset_balance,
+            opening_deductible_offset_balance=current_deductible_offset_balance,
         )
 
         minimal_path_rows.append(make_minimal_path_row(result, simulation_id))
@@ -2874,7 +3270,12 @@ def run_single_simulation(inputs, rng, contribution_event_lookup, projection_con
         current_non_super_deferred_pre_2027_gain = result["ending_non_super_deferred_pre_2027_gain"]
         current_non_super_capital_losses = result["ending_non_super_capital_losses"]
         current_residential_property_value = result["ending_residential_property_value"]
+        current_residential_property_loan_balance = result["residential_property_loan_balance"]
         current_residential_quarantined_loss = result["closing_residential_property_quarantined_loss"]
+        current_cash_reserve_balance = result["ending_cash_reserve_balance"]
+        current_non_deductible_debt_balance = result["non_deductible_debt_balance"]
+        current_non_deductible_offset_balance = result["non_deductible_offset_balance"]
+        current_deductible_offset_balance = result["deductible_offset_balance"]
 
         person1_has_started_pension = result["person1_has_started_pension"]
         person2_has_started_pension = result["person2_has_started_pension"]

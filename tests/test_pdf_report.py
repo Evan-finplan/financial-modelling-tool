@@ -88,6 +88,30 @@ class PdfReportTests(unittest.TestCase):
         self.assertTrue(pdf_bytes.startswith(b"%PDF"))
         self.assertGreater(len(pdf_bytes), 5_000)
 
+    def test_technical_appendix_report_includes_strategy_support_sections(self):
+        strategy_result = {
+            **self.result,
+            "inputs": {
+                **self.inputs,
+                "withdrawal_order": ["cash", "pension", "non_super", "property"],
+                "cash_reserve_floor": 10_000,
+                "non_super_estate_reserve": 100_000,
+                "property_estate_reserve": 0,
+            },
+            "success_rate": 0.9,
+            "p10_final_wealth": 200_000,
+        }
+        pdf_bytes = build_pdf_report_bytes(
+            selected_result=self.result,
+            comparison_results={"Base Case": self.result, "Strategy A": strategy_result},
+            selected_scenario="Base Case",
+            selected_chart_keys=[],
+            report_detail="Technical Appendix",
+            adviser_notes="Compare tax and estate outcomes before implementation.",
+        )
+        self.assertTrue(pdf_bytes.startswith(b"%PDF"))
+        self.assertGreater(len(pdf_bytes), 10_000)
+
     def test_english_report_body_uses_12_point_arial_family(self):
         font_name, styles = pdf_report._styles(False)
         self.assertEqual(styles["body"].fontSize, 12)

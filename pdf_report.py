@@ -26,6 +26,9 @@ from reportlab.platypus import (
     TableStyle,
 )
 
+from debt_analysis import build_debt_strategy_comparison_df
+from strategy_analysis import build_assumption_change_df, build_strategy_comparison_df
+
 
 PDF_CHART_KEYS = (
     "wealth_projection",
@@ -142,7 +145,10 @@ def _localise_warning(value, is_chinese):
         return value
     translations = {
         "Residential rental losses are quarantined from 2027-28 under the modelled legislated rule and carried forward against future residential income.": "根据模型采用的已立法规则，住宅出租亏损自 2027-28 财年起被隔离，并结转以抵减未来住宅收入。",
-        "Residential property modelling is an aggregate, interest-only projection. Property equity is included in net wealth but is not sold or refinanced to fund spending; principal repayments, depreciation schedules, sale costs, and property CGT are not modelled.": "住宅物业采用汇总且仅计利息的预测。物业净值计入净财富，但不会通过出售或再融资来支付支出；本金偿还、折旧明细、出售成本及物业 CGT 均未建模。",
+        "Residential property modelling is an aggregate projection. Property equity is included in net wealth but is not sold or refinanced to fund spending unless the property source is selected; scheduled loan amortisation, depreciation schedules, sale costs outside a disposal strategy, and property CGT are not modelled.": "住宅物业采用汇总预测。物业净值计入净财富；除非选择物业作为资金来源，否则不会通过出售或再融资支付支出。定期摊还、折旧明细、出售策略以外的出售成本及物业 CGT 均未建模。",
+        "Debt strategies are annual cashflow estimates. Deductibility depends on the use of borrowed funds, not the security; confirm loan purpose, offset/redraw structure, refinancing terms and lender requirements before relying on the comparison.": "债务策略属于年度现金流估算。利息能否抵扣取决于借款资金用途而非担保物；依赖比较结果前，应确认贷款用途、Offset／Redraw 结构、再融资条款及贷款机构要求。",
+        "Residential property sale proceeds are an annual strategic estimate. Partial disposals proportionally reduce value and debt after estimated selling costs; legal feasibility, refinancing requirements, transaction-specific costs, and property CGT are not modelled.": "住宅物业出售所得属于年度策略估算。部分出售会在计入预计出售成本后按比例减少物业价值及贷款；法律可行性、再融资要求、交易特定成本及物业 CGT 均未建模。",
+        "The selected drawdown order is a strategic funding assumption. Confirm preservation age, retirement status and all conditions of release before relying on a super withdrawal result.": "所选资产提取顺序属于策略资金假设。依赖 Super 提取结果前，应确认保存年龄、退休状态及所有提取条件。",
         "The discretionary trust 30% minimum tax is based on the September 2026 exposure draft and is not enacted law. Final legislation may change the result.": "全权信托 30% 最低税基于 2026 年 9 月的征求意见稿，尚未成为正式法律；最终立法可能改变结果。",
         "The enacted CGT reform is modelled using one homogeneous non-super pool. The 1 July 2027 transition allocation, annual CPI indexation, loss ordering, and partial disposals are planning estimates and must be reconciled to asset-level records for tax return work.": "已立法的 CGT 改革以单一同质的非养老金资产池建模。2027 年 7 月 1 日的过渡分配、年度 CPI 指数化、亏损抵减顺序及部分出售均为规划估算，报税时必须与单项资产记录核对。",
         "The selected new/affordable housing CGT method is a scenario choice. Confirm statutory eligibility and compare the 50% discount with indexation using actual records at disposal.": "所选新建／可负担住房 CGT 方法属于情景选择。出售时应确认法定资格，并依据实际记录比较 50% 折扣法与指数化方法。",
@@ -550,6 +556,8 @@ def build_pdf_report_bytes(
     input_warnings=None,
     output_warnings=None,
     report_language=None,
+    report_detail="Client Summary",
+    adviser_notes="",
 ):
     selected_chart_keys = [key for key in selected_chart_keys if key in PDF_CHART_KEYS]
     inputs = selected_result["inputs"]
@@ -557,6 +565,9 @@ def build_pdf_report_bytes(
     summary_df = selected_result["summary_df"]
     is_chinese = _language_is_chinese(report_language) if report_language is not None else _is_chinese(inputs)
     font_name, styles = _styles(is_chinese)
+    report_detail = report_detail if report_detail in {
+        "Client Summary", "Advice Support Report", "Technical Appendix"
+    } else "Client Summary"
 
     output = io.BytesIO()
     document = SimpleDocTemplate(
@@ -592,6 +603,7 @@ def build_pdf_report_bytes(
 
     cover_details = [
         (_text(is_chinese, "Scenario", "分析情景"), _scenario_label(selected_scenario, is_chinese)),
+        (_text(is_chinese, "Report detail", "报告详细程度"), report_detail),
         (_text(is_chinese, "Value basis", "价值口径"), _text(is_chinese, "Present Value", "现值") if value_mode == "Present Value" else _text(is_chinese, "Future Value", "终值")),
         (_text(is_chinese, "Report date", "报告日期"), generated_at.strftime("%d %B %Y") if not is_chinese else generated_at.strftime("%Y年%m月%d日")),
     ]
@@ -676,6 +688,91 @@ def build_pdf_report_bytes(
     story.append(metric_table)
     story.append(Spacer(1, 4 * mm))
 
+    strategy_df = build_strategy_comparison_df(comparison_results, is_chinese=is_chinese)
+    if not strategy_df.empty and len(strategy_df) > 1:
+        story.append(Paragraph(_text(is_chinese, "Strategy outcomes", "策略结果"), styles["h1"]))
+        strategy_rows = [[
+            Paragraph(_text(is_chinese, "Scenario", "情景"), styles["table_header"]),
+            Paragraph(_text(is_chinese, "Retirement wealth", "退休时财富"), styles["table_header"]),
+            Paragraph(_text(is_chinese, "Final wealth", "最终财富"), styles["table_header"]),
+            Paragraph(_text(is_chinese, "Failure", "失败概率"), styles["table_header"]),
+            Paragraph(_text(is_chinese, "Cumulative tax", "累计税款"), styles["table_header"]),
+            Paragraph(_text(is_chinese, "Break-even", "收支平衡年"), styles["table_header"]),
+        ]]
+        for _, row in strategy_df.iterrows():
+            strategy_rows.append([
+                Paragraph(escape(str(row["scenario"])), styles["small"]),
+                Paragraph(_money(row["retirement_wealth"]), styles["small"]),
+                Paragraph(_money(row["final_wealth"]), styles["small"]),
+                Paragraph(_percentage(row["failure_probability"]), styles["small"]),
+                Paragraph(_money(row["cumulative_tax"]), styles["small"]),
+                Paragraph("-" if pd.isna(row["break_even_year"]) else f"FY{int(row['break_even_year'])}", styles["small"]),
+            ])
+        strategy_table = Table(strategy_rows, colWidths=[29 * mm, 31 * mm, 31 * mm, 23 * mm, 31 * mm, 27 * mm], repeatRows=1)
+        strategy_table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), JBW_NAVY),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("GRID", (0, 0), (-1, -1), 0.4, JBW_GRID),
+            ("BACKGROUND", (0, 1), (-1, -1), JBW_MIST),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 3),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ]))
+        story.append(strategy_table)
+        best_row = strategy_df.sort_values(["failure_probability", "final_wealth"], ascending=[True, False]).iloc[0]
+        story.append(Paragraph(
+            _text(
+                is_chinese,
+                f"On the modelled outcomes, {escape(str(best_row['scenario']))} has the lowest failure probability, with final wealth of {_money(best_row['final_wealth'])}. This is a comparison result, not a recommendation.",
+                f"根据模型结果，{escape(str(best_row['scenario']))} 的失败概率最低，最终财富为 {_money(best_row['final_wealth'])}。这属于比较结果，并非建议。",
+            ),
+            styles["small"],
+        ))
+
+    debt_strategy_df = build_debt_strategy_comparison_df(comparison_results, is_chinese=is_chinese)
+    if not debt_strategy_df.empty and (
+        len(debt_strategy_df) > 1
+        or float(selected_result["inputs"].get("non_deductible_debt_balance", 0.0)) > 0
+        or float(selected_result["inputs"].get("residential_property_loan_balance", 0.0)) > 0
+    ):
+        story.append(Paragraph(_text(is_chinese, "Debt strategy outcomes", "债务策略结果"), styles["h1"]))
+        debt_rows = [[
+            Paragraph(_text(is_chinese, "Scenario", "情景"), styles["table_header"]),
+            Paragraph(_text(is_chinese, "Interest", "累计利息"), styles["table_header"]),
+            Paragraph(_text(is_chinese, "Non-deductible debt", "不可抵扣债务"), styles["table_header"]),
+            Paragraph(_text(is_chinese, "Deductible debt", "可抵扣债务"), styles["table_header"]),
+            Paragraph(_text(is_chinese, "Offsets", "Offset"), styles["table_header"]),
+            Paragraph(_text(is_chinese, "Final wealth", "最终财富"), styles["table_header"]),
+        ]]
+        for _, row in debt_strategy_df.iterrows():
+            debt_rows.append([
+                Paragraph(escape(str(row["scenario"])), styles["small"]),
+                Paragraph(_money(row["cumulative_interest"]), styles["small"]),
+                Paragraph(_money(row["ending_non_deductible_debt"]), styles["small"]),
+                Paragraph(_money(row["ending_deductible_debt"]), styles["small"]),
+                Paragraph(_money(row["ending_offset_balance"]), styles["small"]),
+                Paragraph(_money(row["final_wealth"]), styles["small"]),
+            ])
+        debt_table = Table(debt_rows, colWidths=[30 * mm, 27 * mm, 31 * mm, 31 * mm, 25 * mm, 28 * mm], repeatRows=1)
+        debt_table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), JBW_NAVY),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("GRID", (0, 0), (-1, -1), 0.4, JBW_GRID),
+            ("BACKGROUND", (0, 1), (-1, -1), JBW_MIST),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 3),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+        ]))
+        story.append(debt_table)
+        story.append(Paragraph(_text(
+            is_chinese,
+            "Deductible debt is limited to the modelled investment-property loan. Interest deductibility must be confirmed from the use of borrowed funds and actual loan records.",
+            "可抵扣债务仅包括模型中的投资物业贷款。利息能否抵扣必须根据借款资金用途及实际贷款记录确认。",
+        ), styles["small"]))
+
+    story.append(CondPageBreak(75 * mm))
     story.append(Paragraph(_text(is_chinese, "Future outlook", "未来情况概述"), styles["h1"]))
     start_year = int(det_df["financial_year_end"].iloc[0]) if not det_df.empty else 0
     end_year = int(det_df["financial_year_end"].iloc[-1]) if not det_df.empty else 0
@@ -732,6 +829,96 @@ def build_pdf_report_bytes(
         story.append(Paragraph(_text(is_chinese, "Items requiring review", "需要审阅的事项"), styles["h1"]))
         for warning in combined_warnings[:8]:
             story.append(Paragraph(f"- {escape(_localise_warning(warning, is_chinese))}", styles["body"]))
+
+    if report_detail in {"Advice Support Report", "Technical Appendix"}:
+        story.append(PageBreak())
+        story.append(Paragraph(_text(is_chinese, "Advice support analysis", "建议支持分析"), styles["title"]))
+        if not strategy_df.empty:
+            story.append(Paragraph(_text(is_chinese, "Key risks and downside observations", "关键风险及不利情景"), styles["h1"]))
+            for _, row in strategy_df.iterrows():
+                story.append(Paragraph(
+                    f"<b>{escape(str(row['scenario']))}:</b> {escape(str(row['key_risks']))}",
+                    styles["body"],
+                ))
+
+            assumption_df = build_assumption_change_df(comparison_results, is_chinese=is_chinese)
+            if not assumption_df.empty:
+                story.append(Paragraph(_text(is_chinese, "Key assumption changes", "关键假设变化"), styles["h1"]))
+                assumption_rows = [[
+                    Paragraph(_text(is_chinese, "Scenario", "情景"), styles["table_header"]),
+                    Paragraph(_text(is_chinese, "Withdrawal order", "提取顺序"), styles["table_header"]),
+                    Paragraph(_text(is_chinese, "Cash floor", "现金底线"), styles["table_header"]),
+                    Paragraph(_text(is_chinese, "Non-super reserve", "非养老金保留"), styles["table_header"]),
+                    Paragraph(_text(is_chinese, "Property reserve", "物业保留"), styles["table_header"]),
+                ]]
+                for _, row in assumption_df.iterrows():
+                    assumption_rows.append([
+                        Paragraph(escape(str(row["scenario"])), styles["small"]),
+                        Paragraph(escape(str(row["withdrawal_order"])), styles["small"]),
+                        Paragraph(_money(row["cash_reserve_floor"]), styles["small"]),
+                        Paragraph(_money(row["non_super_estate_reserve"]), styles["small"]),
+                        Paragraph(_money(row["property_estate_reserve"]), styles["small"]),
+                    ])
+                assumption_table = Table(assumption_rows, colWidths=[25 * mm, 69 * mm, 24 * mm, 27 * mm, 27 * mm], repeatRows=1)
+                assumption_table.setStyle(TableStyle([
+                    ("BACKGROUND", (0, 0), (-1, 0), JBW_NAVY),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                    ("GRID", (0, 0), (-1, -1), 0.4, JBW_GRID),
+                    ("BACKGROUND", (0, 1), (-1, -1), JBW_MIST),
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 3),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+                ]))
+                story.append(assumption_table)
+
+        story.append(Paragraph(_text(is_chinese, "Adviser notes", "顾问备注"), styles["h1"]))
+        notes_text = str(adviser_notes or "").strip()
+        story.append(Paragraph(
+            escape(notes_text) if notes_text else _text(is_chinese, "No adviser notes were entered.", "未填写顾问备注。"),
+            styles["body"],
+        ))
+
+    if report_detail == "Technical Appendix":
+        story.append(PageBreak())
+        story.append(Paragraph(_text(is_chinese, "Technical appendix", "技术附录"), styles["title"]))
+        story.append(Paragraph(_text(is_chinese, "Policy status", "政策状态"), styles["h1"]))
+        policy_rows = [
+            (_text(is_chinese, "Personal tax and super settings", "个人税及 Super 设置"), _text(is_chinese, "Current configured policy", "当前已配置政策")),
+            (_text(is_chinese, "2026 Budget CGT core reform", "2026 Budget CGT 核心改革"), _text(is_chinese, "Enacted", "已立法")),
+            (_text(is_chinese, "CGT transition allocation", "CGT 过渡分配"), _text(is_chinese, "Annual pooled estimate", "年度汇总估算")),
+            (_text(is_chinese, "Residential negative-gearing restriction", "住宅负扣税限制"), _text(is_chinese, "Enacted; aggregate estimate", "已立法；汇总估算")),
+            (_text(is_chinese, "Discretionary trust minimum tax", "Discretionary trust 最低税"), _text(is_chinese, "Exposure draft - not enacted", "征求意见稿 - 尚未立法")),
+            (_text(is_chinese, "Property sale CGT", "物业出售 CGT"), _text(is_chinese, "Not modelled", "尚未建模")),
+            (_text(is_chinese, "Debt deductibility", "债务利息抵扣资格"), _text(is_chinese, "User-confirmed loan-purpose assumption", "由用户确认借款资金用途")),
+        ]
+        policy_table = Table(
+            [[Paragraph(f"<b>{escape(label)}</b>", styles["small"]), Paragraph(escape(status), styles["small"])] for label, status in policy_rows],
+            colWidths=[86 * mm, 86 * mm],
+        )
+        policy_table.setStyle(TableStyle([
+            ("GRID", (0, 0), (-1, -1), 0.4, JBW_GRID),
+            ("BACKGROUND", (0, 0), (-1, -1), JBW_MIST),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ]))
+        story.append(policy_table)
+
+        story.append(Paragraph(_text(is_chinese, "Calculation methodology", "计算方法"), styles["h1"]))
+        methodology_items = [
+            _text(is_chinese, "Annual deterministic projection with separately modelled salary, spending, contributions, tax, super, non-super investments, cash and residential property equity.", "按年度进行确定性预测，分别建模工资、支出、缴款、税务、Super、非养老金投资、现金及住宅物业净值。"),
+            _text(is_chinese, "Monte Carlo paths use the selected return assumptions and a fixed seed for reproducibility.", "蒙特卡洛路径采用所选回报假设，并使用固定随机种子以便复现。"),
+            _text(is_chinese, "Asset drawdown follows the selected source order and respects nominated cash, non-super and property estate floors where possible.", "资产提取遵循所选资金来源顺序，并在可能范围内保留指定的现金、非养老金及物业遗产底线。"),
+            _text(is_chinese, "Annual cash surplus follows the selected debt/offset/investment allocation order. Offsets reduce interest while remaining liquid; direct repayments reduce principal and may not remain redrawable.", "年度现金盈余按照所选债务、Offset 及投资分配顺序处理。Offset 在保持流动性的同时减少利息；直接还款会降低本金且未必可以再次提取。"),
+            _text(is_chinese, "Partial property disposals proportionally reduce value and debt after estimated selling costs. Property CGT is not included.", "部分物业出售会在计入预计出售成本后，按比例减少物业价值及贷款；物业 CGT 未纳入。"),
+        ]
+        for item in methodology_items:
+            story.append(Paragraph(f"- {escape(item)}", styles["body"]))
+
+        story.append(Paragraph(_text(is_chinese, "Data sources and reconciliation", "数据来源及对账"), styles["h1"]))
+        story.append(Paragraph(_text(
+            is_chinese,
+            "Policy parameters and source links are maintained in the application's policy configuration and Budget modelling notes. Advice and tax-return work must be reconciled to current legislation, ATO guidance, actual asset records, published CPI and client source documents.",
+            "政策参数及来源链接维护于应用的政策配置和 Budget 建模说明中。用于建议及报税时，必须与现行法规、ATO 指引、实际资产记录、正式 CPI 及客户原始文件进行对账。",
+        ), styles["body"]))
 
     if selected_chart_keys:
         story.append(PageBreak())
