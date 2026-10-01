@@ -312,7 +312,7 @@ def render_pdf_export_controls(
             "pdf",
         ),
         mime="application/pdf",
-        use_container_width=True,
+        width="stretch",
         key=f"download_pdf_{safe_scope}",
     )
 
@@ -1185,7 +1185,7 @@ def render_assumption_details(df):
     st.subheader(t("Assumption Details", "假设明细"))
     st.dataframe(
         display_df,
-        use_container_width=True,
+        width="stretch",
         column_config={
             "scenario": st.column_config.TextColumn("Scenario"),
             "report_title": st.column_config.TextColumn("Title"),
@@ -1566,7 +1566,7 @@ def render_saved_result_comparison_section(saved_result_sets, value_mode):
     comparison_table = pd.DataFrame(comparison_rows)
     st.dataframe(
         comparison_table,
-        use_container_width=True,
+        width="stretch",
         column_config={
             "Success Rate": st.column_config.NumberColumn("Success Rate", format="%.1f%%"),
             "Median Final Wealth": st.column_config.NumberColumn("Median Final Wealth", format="$%.0f"),
@@ -1594,7 +1594,7 @@ def render_saved_result_comparison_section(saved_result_sets, value_mode):
         hovermode="x unified",
     )
     fig.update_yaxes(tickprefix="$", separatethousands=True)
-    st.plotly_chart(fig, use_container_width=True, key="saved_results_compare_chart")
+    st.plotly_chart(fig, width="stretch", key="saved_results_compare_chart")
 
 
 def get_missing_validation_columns(det_df, inputs):
@@ -2083,7 +2083,7 @@ with st.sidebar:
         data=build_excel_input_workbook_bytes(include_current_values=False),
         file_name="financial_modelling_input_template.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True,
+        width="stretch",
         help=t(
             "Download a clean workbook template for entering model inputs offline.",
             "下载空白输入模板，便于离线填写模型输入。",
@@ -2101,7 +2101,7 @@ with st.sidebar:
     )
     apply_uploaded_input_button = st.button(
         t("Apply Uploaded Input", "应用上传输入"),
-        use_container_width=True,
+        width="stretch",
         disabled=(uploaded_input_file is None),
     )
 
@@ -2110,7 +2110,7 @@ with st.sidebar:
         data=build_excel_input_workbook_bytes(include_current_values=True),
         file_name="financial_modelling_current_input.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True,
+        width="stretch",
         help=t(
             "Download the current on-screen inputs, contribution schedule, and preset assumptions.",
             "下载当前页面输入、缴款计划和预设假设。",
@@ -2148,7 +2148,7 @@ with st.sidebar:
 
     save_results_button = st.button(
         t("Save Current Results", "保存当前结果"),
-        use_container_width=True,
+        width="stretch",
         disabled=(st.session_state.comparison_results is None),
     )
 
@@ -2162,18 +2162,18 @@ with st.sidebar:
 
         rename_button = st.button(
             t("Rename Saved Result", "重命名已保存结果"),
-            use_container_width=True,
+            width="stretch",
         )
 
         delete_button = st.button(
             t("Delete Selected Saved Result", "删除当前已保存结果"),
-            use_container_width=True,
+            width="stretch",
         )
     else:
         rename_button = False
         delete_button = False
 
-    run_button = st.button(t("Run Simulation", "运行模拟"), type="primary", use_container_width=True)
+    run_button = st.button(t("Run Simulation", "运行模拟"), type="primary", width="stretch")
 
 
 if apply_uploaded_input_button:
@@ -2259,7 +2259,7 @@ if show_assumption_panel:
             st.session_state.preset_table_df,
             key="preset_table_editor_panel",
             num_rows="fixed",
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             column_config={
                 "preset": st.column_config.TextColumn("Preset", disabled=True),
@@ -2938,7 +2938,7 @@ with st.form("input_editor_form", clear_on_submit=False):
             contribution_source_df,
             key="contribution_events_editor",
             num_rows="dynamic",
-            use_container_width=True,
+            width="stretch",
             column_config={
                 "financial_year": st.column_config.NumberColumn(
                     t("Financial Year", "财政年度"),
@@ -3066,7 +3066,7 @@ with st.form("input_editor_form", clear_on_submit=False):
             )
             st.dataframe(
                 display_df,
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 column_config={
                     t("Assumption", "假设"): st.column_config.TextColumn(t("Assumption", "假设")),
@@ -3100,7 +3100,7 @@ with st.form("input_editor_form", clear_on_submit=False):
         
 
 
-    apply_inputs_button = st.form_submit_button(t("Apply Inputs", "应用输入"), use_container_width=True)
+    apply_inputs_button = st.form_submit_button(t("Apply Inputs", "应用输入"), width="stretch")
     if apply_inputs_button:
         st.toast(t("Inputs applied.", "输入已应用。"))
 
@@ -3525,16 +3525,16 @@ if active_result_bundle is not None and workspace_mode == "View Results":
             st.subheader(t("Scenario Comparison Summary", "情景比较摘要"))
             st.dataframe(
                 comparison_df[["scenario", "success_rate_label", "median_final_wealth_label", "p10_final_wealth_label", "p90_final_wealth_label"]],
-                use_container_width=True,
+                width="stretch",
             )
 
             success_fig = create_success_rate_comparison_chart(comparison_df)
             success_fig.update_layout(title=t("Success Rate by Scenario", "各情景成功率"), xaxis_title=t("Scenario", "情景"), yaxis_title=t("Success Rate", "成功率"))
-            st.plotly_chart(success_fig, use_container_width=True, key="success_rate_comparison")
+            st.plotly_chart(success_fig, width="stretch", key="success_rate_comparison")
 
             median_fig = create_median_wealth_comparison_chart(comparison_df)
             median_fig.update_layout(title=t("Median Final Wealth by Scenario", "各情景最终财富中位数"), xaxis_title=t("Scenario", "情景"), yaxis_title=t("Median Final Wealth", "最终财富中位数"))
-            st.plotly_chart(median_fig, use_container_width=True, key="median_wealth_comparison")
+            st.plotly_chart(median_fig, width="stretch", key="median_wealth_comparison")
 
         elif adviser_result_section == t("Strategy Comparison", "策略对比"):
             st.subheader(t("Strategy Comparison", "策略对比"))
@@ -3567,7 +3567,7 @@ if active_result_bundle is not None and workspace_mode == "View Results":
                     "break_even_year": t("Break-even", "收支平衡年"),
                     "key_risks": t("Key Risks", "关键风险"),
                 })
-                st.dataframe(display_strategy_df, use_container_width=True, hide_index=True)
+                st.dataframe(display_strategy_df, width="stretch", hide_index=True)
 
                 sc1, sc2 = st.columns(2)
                 with sc1:
@@ -3579,7 +3579,7 @@ if active_result_bundle is not None and workspace_mode == "View Results":
                         title=t("Final Wealth Difference vs Base Case", "最终财富相对 Base Case 的差异"),
                     )
                     wealth_delta_fig.update_layout(showlegend=False, xaxis_title=t("Scenario", "情景"), yaxis_title=t("Difference", "差异"))
-                    st.plotly_chart(wealth_delta_fig, use_container_width=True, key="strategy_final_wealth_delta")
+                    st.plotly_chart(wealth_delta_fig, width="stretch", key="strategy_final_wealth_delta")
                 with sc2:
                     tax_delta_fig = px.bar(
                         strategy_df,
@@ -3589,10 +3589,10 @@ if active_result_bundle is not None and workspace_mode == "View Results":
                         title=t("Cumulative Tax Difference vs Base Case", "累计税款相对 Base Case 的差异"),
                     )
                     tax_delta_fig.update_layout(showlegend=False, xaxis_title=t("Scenario", "情景"), yaxis_title=t("Difference", "差异"))
-                    st.plotly_chart(tax_delta_fig, use_container_width=True, key="strategy_tax_delta")
+                    st.plotly_chart(tax_delta_fig, width="stretch", key="strategy_tax_delta")
 
                 st.subheader(t("Key Assumption Changes", "关键假设变化"))
-                st.dataframe(assumption_change_df, use_container_width=True, hide_index=True)
+                st.dataframe(assumption_change_df, width="stretch", hide_index=True)
                 st.session_state.adviser_notes = st.text_area(
                     t("Adviser Notes", "顾问备注"),
                     value=st.session_state.get("adviser_notes", ""),
@@ -3641,7 +3641,7 @@ if active_result_bundle is not None and workspace_mode == "View Results":
                     "final_wealth_delta": t("Final Wealth vs Base", "最终财富较 Base 差异"),
                     "failure_probability": t("Failure Probability", "失败概率"),
                 })
-                st.dataframe(display_debt_df, use_container_width=True, hide_index=True)
+                st.dataframe(display_debt_df, width="stretch", hide_index=True)
 
                 dc1, dc2 = st.columns(2)
                 with dc1:
@@ -3653,7 +3653,7 @@ if active_result_bundle is not None and workspace_mode == "View Results":
                         title=t("Cumulative Debt Interest", "累计债务利息"),
                     )
                     interest_fig.update_layout(showlegend=False, xaxis_title=t("Scenario", "情景"), yaxis_title=t("Interest", "利息"))
-                    st.plotly_chart(interest_fig, use_container_width=True, key="debt_strategy_interest")
+                    st.plotly_chart(interest_fig, width="stretch", key="debt_strategy_interest")
                 with dc2:
                     debt_fig = px.bar(
                         debt_df,
@@ -3664,7 +3664,7 @@ if active_result_bundle is not None and workspace_mode == "View Results":
                         labels={"value": t("Debt", "债务"), "variable": t("Debt Type", "债务类别")},
                     )
                     debt_fig.update_layout(xaxis_title=t("Scenario", "情景"), yaxis_title=t("Debt", "债务"))
-                    st.plotly_chart(debt_fig, use_container_width=True, key="debt_strategy_ending_debt")
+                    st.plotly_chart(debt_fig, width="stretch", key="debt_strategy_ending_debt")
 
                 debt_path_columns = [
                     "financial_year_end",
@@ -3695,59 +3695,59 @@ if active_result_bundle is not None and workspace_mode == "View Results":
                         title=t("Net Debt Projection", "净债务预测"),
                     )
                     debt_path_fig.update_layout(xaxis_title=t("Financial Year", "财政年度"), yaxis_title=t("Net Debt", "净债务"))
-                    st.plotly_chart(debt_path_fig, use_container_width=True, key="debt_strategy_paths")
+                    st.plotly_chart(debt_path_fig, width="stretch", key="debt_strategy_paths")
 
         elif adviser_result_section == t("Wealth Charts", "财富图表"):
             st.subheader(t("Wealth Charts", "财富图表"))
             det_all_fig = create_deterministic_wealth_chart_comparison(det_scenarios_df, common_inputs)
             det_all_fig.update_layout(title=t("Deterministic Total Wealth Projection", "确定性总财富预测"), xaxis_title=t("Financial Year", "财政年度"), yaxis_title=t("Total Wealth", "总财富"))
-            st.plotly_chart(det_all_fig, use_container_width=True, key=chart_key("deterministic_all", selected_scenario, view_mode, "adviser_lazy"))
+            st.plotly_chart(det_all_fig, width="stretch", key=chart_key("deterministic_all", selected_scenario, view_mode, "adviser_lazy"))
 
             income_spending_fig = create_income_vs_spending_chart(display_det_df, selected_result["inputs"], t(f"Income vs Spending - {selected_scenario}", f"收入与支出 - {selected_scenario}"))
             income_spending_fig.update_layout(xaxis_title=t("Financial Year", "财政年度"), yaxis_title=t("Annual Amount", "年度金额"))
-            st.plotly_chart(income_spending_fig, use_container_width=True, key=chart_key("income_spending", selected_scenario, view_mode, "adviser_lazy"))
+            st.plotly_chart(income_spending_fig, width="stretch", key=chart_key("income_spending", selected_scenario, view_mode, "adviser_lazy"))
 
         elif adviser_result_section == t("Monte Carlo", "蒙特卡洛"):
             st.subheader(t("Monte Carlo", "蒙特卡洛"))
             percentile_fig = create_percentile_paths_chart(display_percentile_df, selected_result["inputs"], t(f"Monte Carlo Percentile Paths - {selected_scenario}", f"蒙特卡洛百分位路径 - {selected_scenario}"))
             percentile_fig.update_layout(xaxis_title=t("Financial Year", "财政年度"), yaxis_title=t("Total Wealth", "总财富"))
-            st.plotly_chart(percentile_fig, use_container_width=True, key=chart_key("percentile", selected_scenario, view_mode, "adviser_lazy"))
+            st.plotly_chart(percentile_fig, width="stretch", key=chart_key("percentile", selected_scenario, view_mode, "adviser_lazy"))
 
             failure_fig = create_failure_probability_chart(selected_result["failure_prob_df"], selected_result["inputs"], t(f"Cumulative Probability of Running Out of Money - {selected_scenario}", f"资金耗尽累计概率 - {selected_scenario}"))
             failure_fig.update_layout(xaxis_title=t("Financial Year", "财政年度"), yaxis_title=t("Failure Probability", "资金耗尽概率"))
-            st.plotly_chart(failure_fig, use_container_width=True, key=chart_key("failure", selected_scenario, view_mode, "adviser_lazy"))
+            st.plotly_chart(failure_fig, width="stretch", key=chart_key("failure", selected_scenario, view_mode, "adviser_lazy"))
 
             histogram_fig = create_histogram(display_summary_df, show_p10=True, show_p50=True, show_p90=True, title_text=t(f"Distribution of Final Wealth - {selected_scenario}", f"最终财富分布 - {selected_scenario}"))
             histogram_fig.update_layout(xaxis_title=t("Final Wealth", "最终财富"), yaxis_title=t("Frequency", "次数"))
-            st.plotly_chart(histogram_fig, use_container_width=True, key=chart_key("histogram", selected_scenario, view_mode, "adviser_lazy"))
+            st.plotly_chart(histogram_fig, width="stretch", key=chart_key("histogram", selected_scenario, view_mode, "adviser_lazy"))
 
         elif adviser_result_section == t("Tax", "税务"):
             st.subheader(t("Tax", "税务"))
             tax_breakdown_fig = create_tax_breakdown_chart(display_det_df, selected_result["inputs"], t(f"Tax Breakdown - {selected_scenario}", f"税务明细 - {selected_scenario}"))
             tax_breakdown_fig.update_layout(xaxis_title=t("Financial Year", "财政年度"), yaxis_title=t("Annual Tax", "年度税款"))
-            st.plotly_chart(tax_breakdown_fig, use_container_width=True, key=chart_key("tax_breakdown", selected_scenario, view_mode, "adviser_lazy"))
+            st.plotly_chart(tax_breakdown_fig, width="stretch", key=chart_key("tax_breakdown", selected_scenario, view_mode, "adviser_lazy"))
 
             total_tax_fig = create_total_tax_paid_chart(display_det_df, selected_result["inputs"], t(f"Total Tax Paid - {selected_scenario}", f"总税款 - {selected_scenario}"))
             total_tax_fig.update_layout(xaxis_title=t("Financial Year", "财政年度"), yaxis_title=t("Annual Tax", "年度税款"))
-            st.plotly_chart(total_tax_fig, use_container_width=True, key=chart_key("total_tax", selected_scenario, view_mode, "adviser_lazy"))
+            st.plotly_chart(total_tax_fig, width="stretch", key=chart_key("total_tax", selected_scenario, view_mode, "adviser_lazy"))
 
             st.subheader(t("Residential Property & Trust Tax Detail", "住宅物业与信托税务明细"))
             st.caption(t(
                 "Trust minimum tax rows are exposure-draft estimates, not enacted-law outcomes.",
                 "信托最低税栏位为 exposure draft 估算，并非已生效法案结果。",
             ))
-            st.dataframe(build_residential_trust_tax_detail_df(display_det_df), use_container_width=True)
+            st.dataframe(build_residential_trust_tax_detail_df(display_det_df), width="stretch")
 
             st.subheader(t("2026 Budget CGT Reconciliation", "2026 Budget CGT 对账"))
             st.caption(t(
                 "Core CGT reform is enacted. Transition allocation and CPI values shown here are pooled planning estimates and require asset-level tax-return reconciliation.",
                 "CGT 核心改革已经立法；此处的过渡分配和 CPI 数值属于汇总规划估算，报税时必须按单项资产对账。",
             ))
-            st.dataframe(build_cgt_validation_df(display_det_df, selected_result["inputs"]), use_container_width=True)
+            st.dataframe(build_cgt_validation_df(display_det_df, selected_result["inputs"]), width="stretch")
 
             pension_tax_free_summary_df = build_pension_tax_free_summary_df(display_det_df, selected_result["inputs"])
             st.subheader(t("Pension Tax-Free Validation Summary", "退休金免税验证摘要"))
-            st.dataframe(pension_tax_free_summary_df, use_container_width=True)
+            st.dataframe(pension_tax_free_summary_df, width="stretch")
 
         elif adviser_result_section == t("Cashflow", "现金流"):
             st.subheader(t("Cashflow", "现金流"))
@@ -3764,13 +3764,13 @@ if active_result_bundle is not None and workspace_mode == "View Results":
                 )
                 st.plotly_chart(
                     cashflow_fig,
-                    use_container_width=True,
+                    width="stretch",
                     key=chart_key("cashflow", selected_scenario, view_mode, "adviser_lazy"),
                 )
 
             adviser_cashflow_df = build_adviser_cashflow_df(display_det_df)
             st.subheader(t("Adviser Cashflow Summary", "顾问现金流摘要"))
-            st.dataframe(adviser_cashflow_df, use_container_width=True)
+            st.dataframe(adviser_cashflow_df, width="stretch")
 
             adviser_cashflow_asset_movement_tax_df = build_adviser_cashflow_asset_movement_tax_df(display_det_df, selected_result["inputs"])
             st.subheader(t("Cashflow, Net Asset Movement & Income Tax by Person", "现金流、净资产变动与个人所得税明细"))
@@ -3778,7 +3778,7 @@ if active_result_bundle is not None and workspace_mode == "View Results":
                 "This table separates cashflow, net asset movement, and total income tax per person for adviser review.",
                 "该表将现金流、净资产变动以及每个人的总所得税拆开，供顾问审阅。",
             ))
-            st.dataframe(adviser_cashflow_asset_movement_tax_df, use_container_width=True)
+            st.dataframe(adviser_cashflow_asset_movement_tax_df, width="stretch")
 
         elif adviser_result_section == t("Debug Tables", "调试表"):
             st.subheader(t("Debug Tables", "调试表"))
@@ -3789,20 +3789,20 @@ if active_result_bundle is not None and workspace_mode == "View Results":
 
             debug_df = build_adviser_debug_df(display_det_df, selected_result["inputs"])
             st.subheader(t("Adviser Debug Table", "顾问调试表"))
-            st.dataframe(debug_df, use_container_width=True)
+            st.dataframe(debug_df, width="stretch")
 
             if st.checkbox(t("Show detailed CGT / pension validation table", "显示详细 CGT / 退休金验证表"), value=False):
                 cgt_validation_df = build_cgt_validation_df(display_det_df, selected_result["inputs"])
-                st.dataframe(cgt_validation_df, use_container_width=True)
+                st.dataframe(cgt_validation_df, width="stretch")
 
             if st.checkbox(t("Show full deterministic projection table", "显示完整确定性预测表"), value=False):
                 key_cols = [col for col in ["financial_year_end", "total_wealth", "ending_total_super_balance", "ending_non_super_balance", "spending", "total_tax_paid", "unmet_shortfall"] if col in display_det_df.columns]
-                st.dataframe(display_det_df[key_cols], use_container_width=True)
+                st.dataframe(display_det_df[key_cols], width="stretch")
 
             if st.checkbox(t("Show Monte Carlo summary tables", "显示蒙特卡洛摘要表"), value=False):
-                st.dataframe(display_summary_df[[col for col in ["simulation_id", "success", "final_wealth"] if col in display_summary_df.columns]], use_container_width=True)
-                st.dataframe(display_percentile_df, use_container_width=True)
-                st.dataframe(selected_result["failure_prob_df"], use_container_width=True)
+                st.dataframe(display_summary_df[[col for col in ["simulation_id", "success", "final_wealth"] if col in display_summary_df.columns]], width="stretch")
+                st.dataframe(display_percentile_df, width="stretch")
+                st.dataframe(selected_result["failure_prob_df"], width="stretch")
 
         elif adviser_result_section == t("Export", "导出"):
             st.subheader(t("Export", "导出"))
@@ -3819,7 +3819,7 @@ if active_result_bundle is not None and workspace_mode == "View Results":
             st.divider()
             st.subheader(t("Excel Workbook", "Excel 工作簿"))
             st.caption(t("Excel is prepared only on demand to avoid slowing down result navigation.", "Excel 只在需要时生成，避免拖慢结果页切换。"))
-            prepare_export = st.button(t("Prepare Excel Export", "准备 Excel 导出"), use_container_width=True)
+            prepare_export = st.button(t("Prepare Excel Export", "准备 Excel 导出"), width="stretch")
             if prepare_export:
                 adviser_cashflow_df = build_adviser_cashflow_df(display_det_df)
                 adviser_cashflow_asset_movement_tax_df = build_adviser_cashflow_asset_movement_tax_df(display_det_df, selected_result["inputs"])
@@ -3847,7 +3847,7 @@ if active_result_bundle is not None and workspace_mode == "View Results":
                     data=excel_file,
                     file_name=build_export_filename(selected_result["inputs"].get("report_title", ""), "financial_projection", selected_scenario, "xlsx"),
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
+                    width="stretch",
                 )
 
     else:
@@ -3862,15 +3862,15 @@ if active_result_bundle is not None and workspace_mode == "View Results":
 
         det_fig = create_deterministic_wealth_chart_comparison(det_single_compare_df, selected_result["inputs"])
         det_fig.update_layout(title=t("Deterministic Total Wealth Projection", "确定性总财富预测"), xaxis_title=t("Financial Year", "财政年度"), yaxis_title=t("Total Wealth", "总财富"))
-        st.plotly_chart(det_fig, use_container_width=True, key=chart_key("deterministic", selected_scenario, view_mode, "client"))
+        st.plotly_chart(det_fig, width="stretch", key=chart_key("deterministic", selected_scenario, view_mode, "client"))
 
         percentile_fig = create_percentile_paths_chart(display_percentile_df, selected_result["inputs"], t(f"Monte Carlo Percentile Paths - {selected_scenario}", f"蒙特卡洛百分位路径 - {selected_scenario}"))
         percentile_fig.update_layout(xaxis_title=t("Financial Year", "财政年度"), yaxis_title=t("Total Wealth", "总财富"))
-        st.plotly_chart(percentile_fig, use_container_width=True, key=chart_key("percentile", selected_scenario, view_mode, "client"))
+        st.plotly_chart(percentile_fig, width="stretch", key=chart_key("percentile", selected_scenario, view_mode, "client"))
 
         failure_fig = create_failure_probability_chart(selected_result["failure_prob_df"], selected_result["inputs"], t(f"Cumulative Probability of Running Out of Money - {selected_scenario}", f"资金耗尽累计概率 - {selected_scenario}"))
         failure_fig.update_layout(xaxis_title=t("Financial Year", "财政年度"), yaxis_title=t("Failure Probability", "资金耗尽概率"))
-        st.plotly_chart(failure_fig, use_container_width=True, key=chart_key("failure", selected_scenario, view_mode, "client"))
+        st.plotly_chart(failure_fig, width="stretch", key=chart_key("failure", selected_scenario, view_mode, "client"))
 
         with st.expander(t("Export PDF Report", "导出 PDF 报告"), expanded=False):
             render_pdf_export_controls(
