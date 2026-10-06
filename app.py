@@ -52,6 +52,7 @@ from strategy_analysis import (
     build_assumption_change_df,
     build_strategy_comparison_df,
 )
+from upload_security import WorkbookUploadError, validate_xlsx_upload
 
 
 # ============================================================
@@ -534,9 +535,27 @@ def apply_uploaded_input_workbook(uploaded_file):
         return False, t("Please upload an Excel file first.", "请先上传一个 Excel 文件。")
 
     try:
-        workbook = pd.read_excel(uploaded_file, sheet_name=None)
+        uploaded_bytes = uploaded_file.getvalue()
+        safe_workbook = validate_xlsx_upload(
+            uploaded_bytes,
+            filename=getattr(uploaded_file, "name", ""),
+        )
+        workbook = pd.read_excel(safe_workbook, sheet_name=None)
+    except WorkbookUploadError as exc:
+        return False, t(f"Upload rejected: {exc}", f"上传已被拒绝：{exc}")
     except Exception as exc:
         return False, t(f"Could not read Excel file: {exc}", f"无法读取 Excel 文件：{exc}")
+
+    if len(workbook) > 12:
+        return False, t(
+            "The workbook contains too many worksheets (maximum 12).",
+            "工作簿包含过多工作表（最多 12 个）。",
+        )
+    if any(frame.shape[0] > 10_000 or frame.shape[1] > 100 for frame in workbook.values()):
+        return False, t(
+            "A worksheet exceeds the supported size of 10,000 rows by 100 columns.",
+            "工作表超出支持范围：最多 10,000 行、100 列。",
+        )
 
     if "inputs" not in workbook:
         return False, t("The workbook must contain a sheet named 'inputs'.", "Excel 文件必须包含名为 'inputs' 的工作表。")
@@ -2140,6 +2159,25 @@ with st.sidebar:
     )
     st.session_state.ui_language = selected_language
 
+    if st.button(
+        t("Clear This Session", "清空本次会话"),
+        width="stretch",
+        help=t(
+            "Remove all current inputs, uploaded data, simulations and saved result snapshots from this browser session.",
+            "清除本次浏览器会话中的所有输入、上传数据、模拟结果及已保存结果快照。",
+        ),
+    ):
+        retained_language = st.session_state.ui_language
+        st.session_state.clear()
+        st.session_state.ui_language = retained_language
+        st.rerun()
+
+    with st.expander(t("Privacy for this session", "本次会话隐私说明"), expanded=False):
+        st.caption(t(
+            "Inputs and uploaded workbooks are processed for this browser session only. The app has no customer database and does not intentionally retain your data after the session is cleared, refreshed or disconnected. Do not enter identifying information that is unnecessary for the calculation.",
+            "输入内容及上传工作簿仅用于本次浏览器会话。本应用不设客户数据库；清空、刷新或断开会话后，不会有意保留你的数据。请勿输入计算并不需要的身份识别信息。",
+        ))
+
     view_mode = st.radio(
         t("View Mode", "视图模式"),
         options=[t("Adviser View", "顾问视图"), t("Client View", "客户视图")],
@@ -2288,6 +2326,10 @@ with st.sidebar:
         )
 
     st.markdown(f"### {t('Input Excel', '输入 Excel')}")
+    st.caption(t(
+        "XLSX only, maximum 10 MB. Workbooks with macros or external links are rejected.",
+        "仅支持 XLSX，最大 10 MB；包含宏或外部链接的工作簿将被拒绝。",
+    ))
     st.download_button(
         label=t("Download Excel Template", "下载 Excel 模板"),
         data=build_excel_input_workbook_bytes(include_current_values=False),

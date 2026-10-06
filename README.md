@@ -56,6 +56,14 @@ A Streamlit-based financial modelling tool for analysing retirement, superannuat
 pip install -r requirements.txt  
 streamlit run app.py
 
+## 🔒 Public-session privacy and upload safeguards
+
+- The app does not use a customer database or persist model inputs between browser sessions.
+- Users can select **Clear This Session** to remove inputs, uploaded data, simulation results and saved snapshots from the current session.
+- Excel uploads are limited to `.xlsx` files of 10 MB or less. Macros, external links, oversized worksheets and unusually large compressed workbooks are rejected before parsing.
+- Production error details are hidden from public users, while cross-site request protections remain enabled.
+- Do not add secrets to the repository. Store future credentials in `.streamlit/secrets.toml` locally or in Streamlit Community Cloud secrets settings.
+
 ## Automated tests
 
 Run the policy and projection regression suite with:

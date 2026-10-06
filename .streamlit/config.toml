@@ -8,7 +8,18 @@ font = "sans serif"
 
 [server]
 headless = true
-runOnSave = true
+runOnSave = false
+maxUploadSize = 10
+maxMessageSize = 50
+enableCORS = true
+enableXsrfProtection = true
+
+[client]
+showErrorDetails = "none"
+toolbarMode = "viewer"
+
+[runner]
+magicEnabled = false
 
 [browser]
 gatherUsageStats = false
