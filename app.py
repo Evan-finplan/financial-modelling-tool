@@ -44,6 +44,7 @@ from model import (
     run_monte_carlo,
     validate_inputs,
 )
+from module_config import MODULE_DEFAULTS, MODULE_LABELS, active_module_names, apply_module_scope
 from pdf_report import CHART_LABELS, PDF_CHART_KEYS, build_pdf_report_bytes
 from strategy_analysis import (
     STRATEGY_PROFILES,
@@ -325,6 +326,14 @@ INPUT_EXCEL_FIELDS = [
     "ui_language",
     "value_mode",
     "household_mode",
+    "module_second_person_enabled",
+    "module_super_enabled",
+    "module_pension_enabled",
+    "module_non_super_enabled",
+    "module_property_enabled",
+    "module_trust_enabled",
+    "module_cash_surplus_enabled",
+    "module_investment_debt_enabled",
     "assumption_preset",
     "report_title",
     "person1_name",
@@ -355,10 +364,21 @@ INPUT_EXCEL_FIELDS = [
     "cash_reserve_balance",
     "cash_reserve_floor",
     "cash_reserve_target",
+    "main_residence_value",
+    "main_residence_capital_growth_rate",
+    "main_residence_loan_balance",
+    "main_residence_interest_rate",
+    "main_residence_annual_loan_repayment",
+    "main_residence_offset_balance",
     "non_deductible_debt_balance",
     "non_deductible_interest_rate",
+    "non_deductible_annual_repayment",
     "non_deductible_offset_balance",
     "deductible_offset_balance",
+    "investment_deductible_debt_balance",
+    "investment_deductible_interest_rate",
+    "investment_deductible_annual_repayment",
+    "investment_deductible_offset_balance",
     "surplus_allocation_profile",
     "non_super_estate_reserve",
     "property_estate_reserve",
@@ -375,6 +395,7 @@ INPUT_EXCEL_FIELDS = [
     "residential_property_enabled",
     "residential_property_value",
     "residential_property_loan_balance",
+    "residential_property_annual_loan_repayment",
     "residential_property_sale_cost_rate",
     "residential_property_gross_rent",
     "residential_property_operating_expenses",
@@ -388,9 +409,13 @@ INPUT_EXCEL_FIELDS = [
     "residential_property_is_exempt_housing",
     "residential_property_ownership_person1_pct",
     "discretionary_trust_enabled",
-    "discretionary_trust_net_income",
-    "discretionary_trust_excluded_income",
-    "discretionary_trust_income_growth_rate",
+    "discretionary_trust_balance",
+    "discretionary_trust_cost_base",
+    "discretionary_trust_income_return_mean",
+    "discretionary_trust_income_return_std",
+    "discretionary_trust_capital_return_mean",
+    "discretionary_trust_capital_return_std",
+    "discretionary_trust_excluded_income_pct",
     "discretionary_trust_subject_to_minimum_tax",
     "discretionary_trust_ownership_person1_pct",
     "annual_living_expenses",
@@ -418,6 +443,13 @@ def _coerce_uploaded_input_value(field_name, value):
     default_value = defaults.get(field_name, "")
 
     if isinstance(default_value, bool):
+        if isinstance(value, str):
+            normalised = value.strip().lower()
+            if normalised in {"true", "yes", "y", "1", "on"}:
+                return True
+            if normalised in {"false", "no", "n", "0", "off", ""}:
+                return False
+            raise ValueError(f"{field_name} must be TRUE or FALSE.")
         return bool(value)
     if isinstance(default_value, int) and not isinstance(default_value, bool):
         return int(float(value))
@@ -515,6 +547,11 @@ def apply_uploaded_input_workbook(uploaded_file):
 
     updated_count = 0
     errors = []
+    pending_module_values = {}
+    uploaded_field_names = {
+        str(value).strip()
+        for value in input_df["input_name"].dropna().tolist()
+    }
     for _, row in input_df.iterrows():
         field_name = str(row.get("input_name", "")).strip()
         if not field_name or field_name not in INPUT_EXCEL_FIELDS:
@@ -530,7 +567,9 @@ def apply_uploaded_input_workbook(uploaded_file):
             # Streamlit widget lifecycle safe handling
             # ==========================================
 
-            if field_name == "assumption_preset":
+            if field_name in MODULE_DEFAULTS:
+                pending_module_values[field_name] = uploaded_value
+            elif field_name == "assumption_preset":
                 st.session_state[
                     "pending_uploaded_assumption_preset"
                 ] = uploaded_value
@@ -541,6 +580,41 @@ def apply_uploaded_input_workbook(uploaded_file):
             
         except Exception as exc:
             errors.append(f"{field_name}: {exc}")
+
+    # Older workbooks pre-date module switches. Infer their intended scope from
+    # the existing input fields so importing them does not unexpectedly hide data.
+    if "module_second_person_enabled" not in uploaded_field_names:
+        pending_module_values["module_second_person_enabled"] = st.session_state.get("household_mode", "Two People") != "One Person"
+    if "module_property_enabled" not in uploaded_field_names:
+        pending_module_values["module_property_enabled"] = bool(st.session_state.get("residential_property_enabled", False))
+    if "module_trust_enabled" not in uploaded_field_names:
+        pending_module_values["module_trust_enabled"] = bool(st.session_state.get("discretionary_trust_enabled", False))
+    if "module_non_deductible_debt_enabled" not in uploaded_field_names:
+        pending_module_values["module_non_deductible_debt_enabled"] = any(
+            float(st.session_state.get(field, 0.0) or 0.0) > 0
+            for field in ["non_deductible_debt_balance", "non_deductible_offset_balance"]
+        )
+    if "module_deductible_debt_enabled" not in uploaded_field_names:
+        property_enabled = pending_module_values.get(
+            "module_property_enabled",
+            bool(st.session_state.get("module_property_enabled", False)),
+        )
+        pending_module_values["module_deductible_debt_enabled"] = property_enabled and any(
+            float(st.session_state.get(field, 0.0) or 0.0) > 0
+            for field in ["residential_property_loan_balance", "deductible_offset_balance"]
+        )
+    if "module_investment_debt_enabled" not in uploaded_field_names:
+        pending_module_values["module_investment_debt_enabled"] = any(
+            float(st.session_state.get(field, 0.0) or 0.0) > 0
+            for field in [
+                "non_deductible_debt_balance",
+                "non_deductible_offset_balance",
+                "investment_deductible_debt_balance",
+                "investment_deductible_offset_balance",
+            ]
+        )
+    if pending_module_values:
+        st.session_state.pending_uploaded_module_values = pending_module_values
 
     if errors:
         return False, t(
@@ -783,14 +857,18 @@ def build_assumption_details_df(inputs_by_scenario):
                 "residential_property_enabled": scenario_inputs.get("residential_property_enabled", False),
                 "residential_property_value": scenario_inputs.get("residential_property_value", 0.0),
                 "residential_property_loan_balance": scenario_inputs.get("residential_property_loan_balance", 0.0),
+                "main_residence_value": scenario_inputs.get("main_residence_value", 0.0),
+                "main_residence_loan_balance": scenario_inputs.get("main_residence_loan_balance", 0.0),
+                "investment_deductible_debt_balance": scenario_inputs.get("investment_deductible_debt_balance", 0.0),
                 "residential_property_gross_rent": scenario_inputs.get("residential_property_gross_rent", 0.0),
                 "residential_property_operating_expenses": scenario_inputs.get("residential_property_operating_expenses", 0.0),
                 "residential_property_interest_rate": scenario_inputs.get("residential_property_interest_rate", 0.0),
                 "residential_property_acquired_before_budget_time": scenario_inputs.get("residential_property_acquired_before_budget_time", False),
                 "residential_property_is_new_build": scenario_inputs.get("residential_property_is_new_build", False),
                 "discretionary_trust_enabled": scenario_inputs.get("discretionary_trust_enabled", False),
-                "discretionary_trust_net_income": scenario_inputs.get("discretionary_trust_net_income", 0.0),
-                "discretionary_trust_excluded_income": scenario_inputs.get("discretionary_trust_excluded_income", 0.0),
+                "discretionary_trust_balance": scenario_inputs.get("discretionary_trust_balance", 0.0),
+                "discretionary_trust_cost_base": scenario_inputs.get("discretionary_trust_cost_base", 0.0),
+                "discretionary_trust_excluded_income_pct": scenario_inputs.get("discretionary_trust_excluded_income_pct", 0.0),
                 "discretionary_trust_subject_to_minimum_tax": scenario_inputs.get("discretionary_trust_subject_to_minimum_tax", True),
                 "person1_annual_income": scenario_inputs["person1_annual_income"],
                 "person2_annual_income": scenario_inputs["person2_annual_income"],
@@ -936,11 +1014,18 @@ def build_adviser_cashflow_df(det_df):
         + safe_col("non_super_withdrawal")
         + safe_col("residential_property_sale_proceeds")
         - safe_col("total_cash_contributions")
-        - safe_col("non_deductible_debt_interest")
+        - safe_col("non_deductible_scheduled_loan_payment")
+        - safe_col("investment_deductible_scheduled_loan_payment")
+        - safe_col("main_residence_scheduled_loan_payment")
+        - safe_col("residential_property_scheduled_principal")
         - safe_col("non_deductible_principal_repayment")
         - safe_col("deductible_principal_repayment")
+        - safe_col("investment_deductible_principal_repayment")
+        - safe_col("main_residence_extra_principal_repayment")
         - safe_col("non_deductible_offset_contribution")
         - safe_col("deductible_offset_contribution")
+        - safe_col("investment_deductible_offset_contribution")
+        - safe_col("main_residence_offset_contribution")
         - safe_col("cash_reserve_top_up")
         - safe_col("surplus_cash_to_non_super")
         - safe_col("non_super_tax_paid")
@@ -980,10 +1065,16 @@ def build_adviser_cashflow_asset_movement_tax_df(det_df, inputs):
         + safe_col("opening_person2_accum_super_balance")
         + safe_col("opening_person2_pension_super_balance")
         + safe_col("opening_residential_property_value")
+        + safe_col("opening_main_residence_value")
+        + safe_col("opening_discretionary_trust_balance")
         + safe_col("opening_non_deductible_offset_balance")
         + safe_col("opening_deductible_offset_balance")
+        + safe_col("opening_main_residence_offset_balance")
+        + safe_col("opening_investment_deductible_offset_balance")
         - safe_col("opening_residential_property_loan_balance")
+        - safe_col("opening_main_residence_loan_balance")
         - safe_col("opening_non_deductible_debt_balance")
+        - safe_col("opening_investment_deductible_debt_balance")
     )
 
     closing_net_assets = safe_col("total_wealth")
@@ -1017,8 +1108,15 @@ def build_adviser_cashflow_asset_movement_tax_df(det_df, inputs):
         "Household Spending": safe_col("spending"),
         "Cash Contributions": safe_col("total_cash_contributions"),
         "Non-deductible Interest": safe_col("non_deductible_debt_interest"),
+        "Other Deductible Investment Interest": safe_col("investment_deductible_debt_interest"),
+        "Main Residence Loan Payment": safe_col("main_residence_scheduled_loan_payment"),
+        "Other Non-deductible Investment Loan Payment": safe_col("non_deductible_scheduled_loan_payment"),
+        "Other Deductible Investment Loan Payment": safe_col("investment_deductible_scheduled_loan_payment"),
+        "Investment Property Scheduled Principal": safe_col("residential_property_scheduled_principal"),
         "Non-deductible Principal Repayment": safe_col("non_deductible_principal_repayment"),
         "Deductible Principal Repayment": safe_col("deductible_principal_repayment"),
+        "Other Deductible Investment Principal Repayment": safe_col("investment_deductible_principal_repayment"),
+        "Main Residence Extra Principal Repayment": safe_col("main_residence_extra_principal_repayment"),
         "Non-deductible Offset Contribution": safe_col("non_deductible_offset_contribution"),
         "Deductible Offset Contribution": safe_col("deductible_offset_contribution"),
         "Minimum Pension Drawdown": safe_col("total_minimum_pension_drawdown"),
@@ -1032,6 +1130,8 @@ def build_adviser_cashflow_asset_movement_tax_df(det_df, inputs):
         "CGT Minimum-Tax Top-Up": safe_col("total_cgt_minimum_tax"),
         "Trustee Minimum Tax (Draft)": safe_col("total_discretionary_trust_minimum_tax"),
         "Closing Residential Property Equity": safe_col("residential_property_net_equity"),
+        "Closing Main Residence Equity": safe_col("main_residence_net_equity"),
+        "Closing Trust Balance": safe_col("ending_discretionary_trust_balance"),
         "Total Income Tax Per Household": total_income_tax,
         "Super Contributions Tax": safe_col("total_super_contributions_tax"),
         "Super Earnings Tax": safe_col("total_super_earnings_tax"),
@@ -1040,6 +1140,8 @@ def build_adviser_cashflow_asset_movement_tax_df(det_df, inputs):
         "Surplus Cash to Non-Super": safe_col("surplus_cash_to_non_super"),
         "Closing Non-deductible Debt": safe_col("non_deductible_debt_balance"),
         "Closing Deductible Debt": safe_col("residential_property_loan_balance"),
+        "Closing Main Residence Loan": safe_col("main_residence_loan_balance"),
+        "Closing Other Deductible Investment Debt": safe_col("investment_deductible_debt_balance"),
         "Closing Non-deductible Offset": safe_col("non_deductible_offset_balance"),
         "Closing Deductible Offset": safe_col("deductible_offset_balance"),
         "Unmet Shortfall": safe_col("unmet_shortfall"),
@@ -1073,12 +1175,17 @@ def build_residential_trust_tax_detail_df(det_df):
         "Quarantined Loss Used": safe_col("residential_property_quarantined_loss_used"),
         "Closing Quarantined Loss": safe_col("closing_residential_property_quarantined_loss"),
         "Property Net Equity": safe_col("residential_property_net_equity"),
+        "Opening Trust Balance": safe_col("opening_discretionary_trust_balance"),
+        "Opening Trust Cost Base": safe_col("opening_discretionary_trust_cost_base"),
         "Trust Net Income": safe_col("discretionary_trust_net_income"),
         "Trust Excluded Income": safe_col("discretionary_trust_excluded_income"),
+        "Trust Excluded Income %": safe_col("discretionary_trust_excluded_income_pct"),
         "Trust Minimum-Tax Income": safe_col("discretionary_trust_minimum_tax_income"),
         "Trustee Minimum Tax (Draft)": safe_col("discretionary_trust_trustee_minimum_tax"),
         "P1 Trust Credit": safe_col("person1_trust_tax_credit"),
         "P2 Trust Credit": safe_col("person2_trust_tax_credit"),
+        "Closing Trust Balance": safe_col("ending_discretionary_trust_balance"),
+        "Closing Trust Cost Base": safe_col("ending_discretionary_trust_cost_base"),
     })
 
 
@@ -1709,6 +1816,10 @@ if "pending_uploaded_assumption_preset" in st.session_state:
     ]:
         st.session_state["assumption_preset"] = pending_preset
 
+if "pending_uploaded_module_values" in st.session_state:
+    for module_key, module_value in st.session_state.pop("pending_uploaded_module_values").items():
+        st.session_state[module_key] = bool(module_value)
+
 
 # ============================================================
 # SECTION: SESSION DEFAULTS
@@ -1738,6 +1849,7 @@ defaults = {
     "projection_years": 40,
     "retirement_spending_trigger": "Both Retired",
     "household_mode": "Two People",
+    **MODULE_DEFAULTS,
     "report_title": "",
     "person1_name": "",
     "person2_name": "",
@@ -1764,10 +1876,21 @@ defaults = {
     "cash_reserve_balance": 50000.0,
     "cash_reserve_floor": 10000.0,
     "cash_reserve_target": 50000.0,
+    "main_residence_value": 1500000.0,
+    "main_residence_capital_growth_rate": 0.03,
+    "main_residence_loan_balance": 0.0,
+    "main_residence_interest_rate": 0.06,
+    "main_residence_annual_loan_repayment": 0.0,
+    "main_residence_offset_balance": 0.0,
     "non_deductible_debt_balance": 0.0,
     "non_deductible_interest_rate": 0.06,
+    "non_deductible_annual_repayment": 0.0,
     "non_deductible_offset_balance": 0.0,
     "deductible_offset_balance": 0.0,
+    "investment_deductible_debt_balance": 0.0,
+    "investment_deductible_interest_rate": 0.06,
+    "investment_deductible_annual_repayment": 0.0,
+    "investment_deductible_offset_balance": 0.0,
     "surplus_allocation_profile": "Non-deductible Offset > Non-deductible Debt > Deductible Offset > Deductible Debt > Invest",
     "surplus_allocation_order": ["non_deductible_offset", "non_deductible_repayment", "deductible_offset", "deductible_repayment", "non_super"],
     "non_super_estate_reserve": 0.0,
@@ -1787,6 +1910,7 @@ defaults = {
     "residential_property_enabled": False,
     "residential_property_value": 0.0,
     "residential_property_loan_balance": 0.0,
+    "residential_property_annual_loan_repayment": 0.0,
     "residential_property_gross_rent": 0.0,
     "residential_property_operating_expenses": 0.0,
     "residential_property_interest_rate": 0.06,
@@ -1802,6 +1926,13 @@ defaults = {
     "discretionary_trust_net_income": 0.0,
     "discretionary_trust_excluded_income": 0.0,
     "discretionary_trust_income_growth_rate": 0.03,
+    "discretionary_trust_balance": 0.0,
+    "discretionary_trust_cost_base": 0.0,
+    "discretionary_trust_income_return_mean": 0.02,
+    "discretionary_trust_income_return_std": 0.02,
+    "discretionary_trust_capital_return_mean": 0.03,
+    "discretionary_trust_capital_return_std": 0.08,
+    "discretionary_trust_excluded_income_pct": 0.0,
     "discretionary_trust_subject_to_minimum_tax": True,
     "discretionary_trust_ownership_person1_pct": 50.0,
     "annual_living_expenses": 90000.0,
@@ -1875,6 +2006,16 @@ workspace_mode = st.session_state.workspace_mode
 show_assumption_panel = bool(st.session_state.show_assumption_panel)
 show_live_input_checks = bool(st.session_state.show_live_input_checks)
 is_one_person_mode = household_mode == "One Person"
+module_second_person_enabled = bool(st.session_state.module_second_person_enabled)
+module_super_enabled = bool(st.session_state.module_super_enabled)
+module_pension_enabled = bool(st.session_state.module_pension_enabled) and module_super_enabled
+module_non_super_enabled = bool(st.session_state.module_non_super_enabled)
+module_property_enabled = bool(st.session_state.module_property_enabled)
+module_trust_enabled = bool(st.session_state.module_trust_enabled)
+module_cash_surplus_enabled = bool(st.session_state.module_cash_surplus_enabled)
+module_investment_debt_enabled = bool(st.session_state.module_investment_debt_enabled)
+module_non_deductible_debt_enabled = module_investment_debt_enabled
+module_deductible_debt_enabled = module_investment_debt_enabled
 
 person1_current_age = int(st.session_state.person1_current_age)
 person2_current_age = int(st.session_state.person2_current_age)
@@ -1903,10 +2044,21 @@ non_super_cost_base = st.session_state.non_super_cost_base
 cash_reserve_balance = st.session_state.cash_reserve_balance
 cash_reserve_floor = st.session_state.cash_reserve_floor
 cash_reserve_target = st.session_state.cash_reserve_target
+main_residence_value = st.session_state.main_residence_value
+main_residence_capital_growth_rate = st.session_state.main_residence_capital_growth_rate
+main_residence_loan_balance = st.session_state.main_residence_loan_balance
+main_residence_interest_rate = st.session_state.main_residence_interest_rate
+main_residence_annual_loan_repayment = st.session_state.main_residence_annual_loan_repayment
+main_residence_offset_balance = st.session_state.main_residence_offset_balance
 non_deductible_debt_balance = st.session_state.non_deductible_debt_balance
 non_deductible_interest_rate = st.session_state.non_deductible_interest_rate
+non_deductible_annual_repayment = st.session_state.non_deductible_annual_repayment
 non_deductible_offset_balance = st.session_state.non_deductible_offset_balance
 deductible_offset_balance = st.session_state.deductible_offset_balance
+investment_deductible_debt_balance = st.session_state.investment_deductible_debt_balance
+investment_deductible_interest_rate = st.session_state.investment_deductible_interest_rate
+investment_deductible_annual_repayment = st.session_state.investment_deductible_annual_repayment
+investment_deductible_offset_balance = st.session_state.investment_deductible_offset_balance
 surplus_allocation_profile = st.session_state.surplus_allocation_profile
 surplus_allocation_order = list(st.session_state.surplus_allocation_order)
 non_super_estate_reserve = st.session_state.non_super_estate_reserve
@@ -1926,6 +2078,7 @@ cgt_minimum_tax_exempt = st.session_state.cgt_minimum_tax_exempt
 residential_property_enabled = st.session_state.residential_property_enabled
 residential_property_value = st.session_state.residential_property_value
 residential_property_loan_balance = st.session_state.residential_property_loan_balance
+residential_property_annual_loan_repayment = st.session_state.residential_property_annual_loan_repayment
 residential_property_gross_rent = st.session_state.residential_property_gross_rent
 residential_property_operating_expenses = st.session_state.residential_property_operating_expenses
 residential_property_interest_rate = st.session_state.residential_property_interest_rate
@@ -1938,6 +2091,13 @@ residential_property_is_new_build = st.session_state.residential_property_is_new
 residential_property_is_exempt_housing = st.session_state.residential_property_is_exempt_housing
 residential_property_ownership_person1 = st.session_state.residential_property_ownership_person1_pct
 discretionary_trust_enabled = st.session_state.discretionary_trust_enabled
+discretionary_trust_balance = st.session_state.discretionary_trust_balance
+discretionary_trust_cost_base = st.session_state.discretionary_trust_cost_base
+discretionary_trust_income_return_mean = st.session_state.discretionary_trust_income_return_mean
+discretionary_trust_income_return_std = st.session_state.discretionary_trust_income_return_std
+discretionary_trust_capital_return_mean = st.session_state.discretionary_trust_capital_return_mean
+discretionary_trust_capital_return_std = st.session_state.discretionary_trust_capital_return_std
+discretionary_trust_excluded_income_pct = st.session_state.discretionary_trust_excluded_income_pct
 discretionary_trust_net_income = st.session_state.discretionary_trust_net_income
 discretionary_trust_excluded_income = st.session_state.discretionary_trust_excluded_income
 discretionary_trust_income_growth_rate = st.session_state.discretionary_trust_income_growth_rate
@@ -1985,16 +2145,59 @@ with st.sidebar:
         options=[t("Adviser View", "顾问视图"), t("Client View", "客户视图")],
     )
 
-    household_mode = st.radio(
-        t("Household Mode", "家庭模式"),
-        options=["One Person", "Two People"],
-        index=0 if st.session_state.household_mode == "One Person" else 1,
-        help=t(
-            "One Person mode excludes Person 2 from the model. Household spending is not reduced automatically.",
-            "单人模式会把人物 2 排除出模型，但不会自动下调家庭支出。",
-        ),
-    )
-    is_one_person_mode = household_mode == "One Person"
+    with st.expander(t("Client Modules", "客户模块"), expanded=False):
+        st.caption(t(
+            "Untick modules that do not apply. Their saved inputs are retained but excluded from calculations, validation, navigation and reports.",
+            "取消不适用的模块。已保存输入会保留，但不会进入计算、验证、页面导航和报告。",
+        ))
+        module_second_person_enabled = st.checkbox(
+            t("Second household member", "第二位家庭成员"),
+            key="module_second_person_enabled",
+        )
+        module_super_enabled = st.checkbox(
+            t("Super accumulation", "Super 累积账户"),
+            key="module_super_enabled",
+        )
+        if not module_super_enabled:
+            st.session_state.module_pension_enabled = False
+        module_pension_enabled = st.checkbox(
+            t("Pension accounts", "Pension 账户"),
+            key="module_pension_enabled",
+            disabled=not module_super_enabled,
+        )
+        module_non_super_enabled = st.checkbox(
+            t("Non-super investments", "非 Super 投资"),
+            key="module_non_super_enabled",
+        )
+        module_property_enabled = st.checkbox(
+            t("Residential investment property", "住宅投资物业"),
+            key="module_property_enabled",
+        )
+        module_trust_enabled = st.checkbox(
+            t("Discretionary trust", "Discretionary Trust"),
+            key="module_trust_enabled",
+        )
+        module_cash_surplus_enabled = st.checkbox(
+            t("Cash surplus strategy", "现金盈余策略"),
+            key="module_cash_surplus_enabled",
+        )
+        module_investment_debt_enabled = st.checkbox(
+            t("Investment debt", "投资债务"),
+            key="module_investment_debt_enabled",
+            help=t(
+                "Covers other deductible and non-deductible investment borrowing. Main-residence and residential-investment-property loans are entered on the Property page.",
+                "用于其他可抵扣及不可抵扣投资借款。主住宅及住宅投资物业贷款在“物业”页面输入。",
+            ),
+        )
+        module_non_deductible_debt_enabled = module_investment_debt_enabled
+        module_deductible_debt_enabled = module_investment_debt_enabled
+
+    household_mode = "Two People" if module_second_person_enabled else "One Person"
+    is_one_person_mode = not module_second_person_enabled
+    st.caption(t(
+        f"Active modules: {len(active_module_names(st.session_state, is_chinese=is_cn()))}",
+        f"已启用模块：{len(active_module_names(st.session_state, is_chinese=is_cn()))}",
+    ))
 
     value_mode = st.radio(
         t("Value Display", "数值显示"),
@@ -2036,14 +2239,21 @@ with st.sidebar:
         ),
     )
 
+    scenario_mode_options = [
+        t("Single Scenario", "单一情景"),
+        t("Compare Standard Presets", "比较标准预设"),
+    ]
+    if module_super_enabled or module_non_super_enabled or module_property_enabled:
+        scenario_mode_options.append(t("Compare Asset Drawdown Strategies", "比较资产提取策略"))
+    if module_cash_surplus_enabled and (
+        module_investment_debt_enabled
+        or module_property_enabled
+        or float(st.session_state.get("main_residence_loan_balance", 0.0)) > 0
+    ):
+        scenario_mode_options.append(t("Compare Debt Repayment Strategies", "比较债务偿还策略"))
     scenario_mode = st.radio(
         t("Scenario Mode", "情景模式"),
-        options=[
-            t("Single Scenario", "单一情景"),
-            t("Compare Standard Presets", "比较标准预设"),
-            t("Compare Asset Drawdown Strategies", "比较资产提取策略"),
-            t("Compare Debt Repayment Strategies", "比较债务偿还策略"),
-        ],
+        options=scenario_mode_options,
     )
 
     simulation_depth_options = ["Fast", "Standard", "Deep"]
@@ -2228,6 +2438,15 @@ Use this tool to model retirement sustainability, super accumulation to pension 
         )
     )
 
+active_modules_display = active_module_names(st.session_state, is_chinese=is_cn())
+with st.container(border=True):
+    st.markdown(f"### {t('Active client scope', '当前客户范围')}")
+    st.write(" · ".join(active_modules_display) if active_modules_display else t("Core household cashflow only", "仅核心家庭现金流"))
+    st.caption(t(
+        "Use Client Modules in the sidebar to include or remove optional parts of the model.",
+        "可在侧边栏的“客户模块”中加入或移除可选模型部分。",
+    ))
+
 
 # ============================================================
 # SECTION: ASSUMPTION SETTINGS PANEL
@@ -2294,12 +2513,19 @@ section_keys = [
     "person1",
     "household",
     "property_trust",
-    "contributions",
     "returns",
     "simulation",
 ]
 if not is_one_person_mode:
     section_keys.insert(3, "person2")
+if module_trust_enabled:
+    section_keys.insert(-2, "trust")
+if module_cash_surplus_enabled:
+    section_keys.insert(-2, "cash_surplus")
+if module_investment_debt_enabled:
+    section_keys.insert(-2, "investment_debt")
+if module_super_enabled:
+    section_keys.insert(-2, "contributions")
 
 section_labels = {
     "report": t("Report", "报告"),
@@ -2307,7 +2533,10 @@ section_labels = {
     "person1": t("Person 1", "人物 1"),
     "person2": t("Person 2", "人物 2"),
     "household": t("Household", "家庭"),
-    "property_trust": t("Property & Trust", "住宅与信托"),
+    "property_trust": t("Property", "物业"),
+    "trust": t("Trust", "信托"),
+    "cash_surplus": t("Cash Surplus", "现金盈余"),
+    "investment_debt": t("Investment Debt", "投资债务"),
     "contributions": t("Contributions", "缴款设置"),
     "returns": t("Returns", "回报假设"),
     "simulation": t("Simulation", "模拟设置"),
@@ -2320,6 +2549,10 @@ legacy_section_map = {
     "Person 2": "person2",
     "Household": "household",
     "Property & Trust": "property_trust",
+    "Property": "property_trust",
+    "Trust": "trust",
+    "Cash Surplus": "cash_surplus",
+    "Investment Debt": "investment_debt",
     "Contributions": "contributions",
     "Returns": "returns",
     "Simulation": "simulation",
@@ -2329,6 +2562,10 @@ legacy_section_map = {
     "人物 2": "person2",
     "家庭": "household",
     "住宅与信托": "property_trust",
+    "物业": "property_trust",
+    "信托": "trust",
+    "现金盈余": "cash_surplus",
+    "投资债务": "investment_debt",
     "缴款设置": "contributions",
     "回报假设": "returns",
     "模拟设置": "simulation",
@@ -2441,43 +2678,48 @@ with st.form("input_editor_form", clear_on_submit=False):
                 step=1,
                 help=t("Current age at the start of the projection.", "预测开始时的当前年龄。"),
             )
-            person1_accum_super_balance = currency_text_input(
-                t("Person 1 Accumulation Super Balance", "人物 1 累积型养老金余额"),
-                st.session_state.person1_accum_super_balance,
-                "person1_accum_super_balance_input",
-                help_text=t("Opening accumulation super balance.", "期初 accumulation super 余额。"),
-            )
-            person1_pension_super_balance = currency_text_input(
-                t("Person 1 Pension Super Balance", "人物 1 养老金阶段余额"),
-                st.session_state.person1_pension_super_balance,
-                "person1_pension_super_balance_input",
-                help_text=t("Opening pension super balance.", "期初 pension super 余额。"),
-            )
+            if module_super_enabled:
+                person1_accum_super_balance = currency_text_input(
+                    t("Person 1 Accumulation Super Balance", "人物 1 累积型养老金余额"),
+                    st.session_state.person1_accum_super_balance,
+                    "person1_accum_super_balance_input",
+                    help_text=t("Opening accumulation super balance.", "期初 accumulation super 余额。"),
+                )
+            if module_pension_enabled:
+                person1_pension_super_balance = currency_text_input(
+                    t("Person 1 Pension Super Balance", "人物 1 养老金阶段余额"),
+                    st.session_state.person1_pension_super_balance,
+                    "person1_pension_super_balance_input",
+                    help_text=t("Opening pension super balance.", "期初 pension super 余额。"),
+                )
         with p1b:
             person1_retirement_age = st.number_input(
                 t("Person 1 Retirement Age", "人物 1 退休年龄"),
                 value=int(st.session_state.person1_retirement_age),
                 step=1,
             )
-            person1_accum_super_cost_base = currency_text_input(
+            if module_super_enabled:
+                person1_accum_super_cost_base = currency_text_input(
                 t("Person 1 Accumulation Super Cost Base", "人物 1 累积型养老金成本基础"),
                 st.session_state.person1_accum_super_cost_base,
                 "person1_accum_super_cost_base_input",
                 help_text=t("Cost base used for super withdrawal CGT approximation in accumulation phase.", "用于 accumulation 阶段提取 CGT 近似计算的成本基础。"),
             )
-            person1_pension_super_cost_base = currency_text_input(
+            if module_pension_enabled:
+                person1_pension_super_cost_base = currency_text_input(
                 t("Person 1 Pension Super Cost Base", "人物 1 养老金阶段成本基础"),
                 st.session_state.person1_pension_super_cost_base,
                 "person1_pension_super_cost_base_input",
                 help_text=t("Cost base carried inside the pension pool for internal tracking.", "用于 pension 池内部追踪的成本基础。"),
             )
         with p1c:
-            person1_pension_start_age = st.number_input(
+            if module_pension_enabled:
+                person1_pension_start_age = st.number_input(
                 t("Person 1 Pension Start Age", "人物 1 养老金开始年龄"),
                 value=int(st.session_state.person1_pension_start_age),
                 step=1,
             )
-            person1_transfer_balance_cap = currency_text_input(
+                person1_transfer_balance_cap = currency_text_input(
                 t("Person 1 Transfer Balance Cap", "人物 1 转移余额上限"),
                 st.session_state.person1_transfer_balance_cap,
                 "person1_transfer_balance_cap_input",
@@ -2500,13 +2742,15 @@ with st.form("input_editor_form", clear_on_submit=False):
                 step=1,
                 help=t("Current age at the start of the projection.", "预测开始时的当前年龄。"),
             )
-            person2_accum_super_balance = currency_text_input(
+            if module_super_enabled:
+                person2_accum_super_balance = currency_text_input(
                 t("Person 2 Accumulation Super Balance", "人物 2 累积型养老金余额"),
                 st.session_state.person2_accum_super_balance,
                 "person2_accum_super_balance_input",
                 help_text=t("Opening accumulation super balance.", "期初 accumulation super 余额。"),
             )
-            person2_pension_super_balance = currency_text_input(
+            if module_pension_enabled:
+                person2_pension_super_balance = currency_text_input(
                 t("Person 2 Pension Super Balance", "人物 2 养老金阶段余额"),
                 st.session_state.person2_pension_super_balance,
                 "person2_pension_super_balance_input",
@@ -2519,26 +2763,29 @@ with st.form("input_editor_form", clear_on_submit=False):
                 step=1,
                 help=t("Employment income stops once current age reaches retirement age.", "达到退休年龄后，employment income 停止。"),
             )
-            person2_accum_super_cost_base = currency_text_input(
+            if module_super_enabled:
+                person2_accum_super_cost_base = currency_text_input(
                 t("Person 2 Accumulation Super Cost Base", "人物 2 累积型养老金成本基础"),
                 st.session_state.person2_accum_super_cost_base,
                 "person2_accum_super_cost_base_input",
                 help_text=t("Cost base used for super withdrawal CGT approximation in accumulation phase.", "用于 accumulation 阶段提取 CGT 近似计算的成本基础。"),
             )
-            person2_pension_super_cost_base = currency_text_input(
+            if module_pension_enabled:
+                person2_pension_super_cost_base = currency_text_input(
                 t("Person 2 Pension Super Cost Base", "人物 2 养老金阶段成本基础"),
                 st.session_state.person2_pension_super_cost_base,
                 "person2_pension_super_cost_base_input",
                 help_text=t("Cost base carried inside the pension pool for internal tracking.", "用于 pension 池内部追踪的成本基础。"),
             )
         with p2c:
-            person2_pension_start_age = st.number_input(
+            if module_pension_enabled:
+                person2_pension_start_age = st.number_input(
                 t("Person 2 Pension Start Age", "人物 2 养老金开始年龄"),
                 value=int(st.session_state.person2_pension_start_age),
                 step=1,
                 help=t("Age when accumulation super can start transferring into pension phase in the model.", "模型中 accumulation super 开始转入 pension 的年龄。"),
             )
-            person2_transfer_balance_cap = currency_text_input(
+                person2_transfer_balance_cap = currency_text_input(
                 t("Person 2 Transfer Balance Cap", "人物 2 转移余额上限"),
                 st.session_state.person2_transfer_balance_cap,
                 "person2_transfer_balance_cap_input",
@@ -2562,39 +2809,48 @@ with st.form("input_editor_form", clear_on_submit=False):
             )
         hh1, hh2 = st.columns(2)
         with hh1:
-            non_super_balance = currency_text_input(
-                t("Non-Super Balance", "非养老金资产余额"),
-                st.session_state.non_super_balance,
-                "non_super_balance_input",
-                help_text=t("Opening non-super investment pool market value.", "期初非养老金投资池市值。"),
-            )
+            if module_non_super_enabled:
+                non_super_balance = currency_text_input(
+                    t(
+                        "Household Non-Super Balance (excludes trust assets)" if module_trust_enabled else "Household Non-Super Balance",
+                        "家庭非 Super 资产余额（不含信托资产）" if module_trust_enabled else "家庭非 Super 资产余额",
+                    ),
+                    st.session_state.non_super_balance,
+                    "non_super_balance_input",
+                    help_text=t(
+                        "Opening personally held non-super investment pool. Trust assets and trust income are modelled separately.",
+                        "个人直接持有的期初非 Super 投资池；信托资产及信托收入会单独建模。",
+                    ),
+                )
             annual_living_expenses = currency_text_input(
                 t("Annual Living Expenses", "年度生活支出"),
                 st.session_state.annual_living_expenses,
                 "annual_living_expenses_input",
                 help_text=t("Current annual household spending before retirement trigger applies.", "退休支出触发前的当前年度家庭支出。"),
             )
-            cgt_discount_rate = percentage_text_input(
-                t("CGT Discount Rate", "资本利得税折扣率"),
-                float(st.session_state.cgt_discount_rate),
-                "cgt_discount_rate_input",
-                decimals=1,
-                help_text=t("Discount applied to non-super realised capital gains under the average-cost model.", "在 average-cost 模型下适用于非养老金已实现资本利得的折扣率。"),
-            )
+            if module_non_super_enabled:
+                cgt_discount_rate = percentage_text_input(
+                    t("CGT Discount Rate", "资本利得税折扣率"),
+                    float(st.session_state.cgt_discount_rate),
+                    "cgt_discount_rate_input",
+                    decimals=1,
+                    help_text=t("Discount applied to non-super realised capital gains under the average-cost model.", "在 average-cost 模型下适用于非养老金已实现资本利得的折扣率。"),
+                )
         with hh2:
-            non_super_cost_base = currency_text_input(
-                t("Non-Super Cost Base", "非养老金资产成本基础"),
-                st.session_state.non_super_cost_base,
-                "non_super_cost_base_input",
-                help_text=t("Cost base of the non-super investment pool. It must not exceed market value.", "非养老金投资池的成本基础，不能高于当前市值。"),
-            )
+            if module_non_super_enabled:
+                non_super_cost_base = currency_text_input(
+                    t("Non-Super Cost Base", "非养老金资产成本基础"),
+                    st.session_state.non_super_cost_base,
+                    "non_super_cost_base_input",
+                    help_text=t("Cost base of the non-super investment pool. It must not exceed market value.", "非养老金投资池的成本基础，不能高于当前市值。"),
+                )
             retirement_spending = currency_text_input(
                 t("Retirement Spending", "退休后支出"),
                 st.session_state.retirement_spending,
                 "retirement_spending_input",
                 help_text=t("Target household spending after the retirement trigger is reached. This amount is internally indexed by inflation before activation.", "达到退休触发条件后的目标家庭支出。该数值在生效前也会按 inflation 内部递增。"),
             )
-            if is_one_person_mode:
+            if module_non_super_enabled and is_one_person_mode:
                 st.text_input(
                     t("Person 1 Ownership %", "人物 1 持有比例 %"),
                     value="100.0%",
@@ -2603,7 +2859,7 @@ with st.form("input_editor_form", clear_on_submit=False):
                     help=t("Single-person mode fixes non-super ownership to 100% Person 1.", "单人模式下非养老金持有比例固定为 Person 1 的 100%。"),
                 )
                 non_super_ownership_person1 = 100.0
-            else:
+            elif module_non_super_enabled:
                 non_super_ownership_person1 = percentage_text_input(
                     t("Person 1 Ownership %", "人物 1 持有比例 %"),
                     st.session_state.non_super_ownership_person1_pct / 100.0,
@@ -2618,16 +2874,39 @@ with st.form("input_editor_form", clear_on_submit=False):
             "The selected order determines which assets fund an annual cash shortfall first. Minimum reserve amounts are preserved where possible.",
             "所选顺序决定年度现金缺口优先由哪些资产提供。模型会尽量保留所设定的最低储备金额。",
         ))
-        drawdown_profiles = {
+        available_drawdown_sources = {"cash"}
+        if module_non_super_enabled:
+            available_drawdown_sources.add("non_super")
+        if module_pension_enabled:
+            available_drawdown_sources.add("pension")
+        if module_super_enabled:
+            available_drawdown_sources.add("accumulation")
+        if module_property_enabled:
+            available_drawdown_sources.add("property")
+        candidate_drawdown_profiles = {
             "Cash > Non-super > Pension > Accumulation > Property": ["cash", "non_super", "pension", "accumulation", "property"],
             "Cash > Pension > Accumulation > Non-super > Property": ["cash", "pension", "accumulation", "non_super", "property"],
             "Cash > Property > Non-super > Pension > Accumulation": ["cash", "property", "non_super", "pension", "accumulation"],
             "Cash > Pension > Accumulation > Property > Non-super": ["cash", "pension", "accumulation", "property", "non_super"],
         }
+        source_labels = {
+            "cash": t("Cash", "现金"),
+            "non_super": t("Non-super", "非 Super"),
+            "pension": "Pension",
+            "accumulation": "Accumulation",
+            "property": t("Property", "物业"),
+        }
+        drawdown_profiles = {}
+        for candidate_order in candidate_drawdown_profiles.values():
+            filtered_order = [item for item in candidate_order if item in available_drawdown_sources]
+            filtered_label = " > ".join(source_labels[item] for item in filtered_order)
+            drawdown_profiles.setdefault(filtered_label, filtered_order)
+        current_drawdown_profile = st.session_state.get("drawdown_profile", "")
+        drawdown_index = list(drawdown_profiles).index(current_drawdown_profile) if current_drawdown_profile in drawdown_profiles else 0
         drawdown_profile = st.selectbox(
             t("Drawdown Order", "资产提取顺序"),
             options=list(drawdown_profiles),
-            index=list(drawdown_profiles).index(st.session_state.get("drawdown_profile", next(iter(drawdown_profiles)))),
+            index=drawdown_index,
             help=t("Minimum pension payments still occur before discretionary withdrawals.", "最低 Pension 提取仍会在可选择的额外提取之前发生。"),
         )
         withdrawal_order = drawdown_profiles[drawdown_profile]
@@ -2645,275 +2924,343 @@ with st.form("input_editor_form", clear_on_submit=False):
                 "cash_reserve_floor_input",
             )
         with dr3:
-            non_super_estate_reserve = currency_text_input(
-                t("Non-super Estate Reserve", "非养老金遗产保留"),
-                st.session_state.non_super_estate_reserve,
-                "non_super_estate_reserve_input",
-            )
+            if module_non_super_enabled:
+                non_super_estate_reserve = currency_text_input(
+                    t("Non-super Estate Reserve", "非养老金遗产保留"),
+                    st.session_state.non_super_estate_reserve,
+                    "non_super_estate_reserve_input",
+                )
         with dr4:
-            property_estate_reserve = currency_text_input(
-                t("Property Equity Reserve", "物业净值保留"),
-                st.session_state.property_estate_reserve,
-                "property_estate_reserve_input",
-            )
+            if module_property_enabled:
+                property_estate_reserve = currency_text_input(
+                    t("Property Equity Reserve", "物业净值保留"),
+                    st.session_state.property_estate_reserve,
+                    "property_estate_reserve_input",
+                )
 
-        st.divider()
-        st.subheader(t("Debt & Cash Surplus Strategy", "债务与现金盈余策略"))
-        st.caption(t(
-            "Non-deductible debt covers private-purpose borrowing such as a home loan. Deductible debt is the investment-property loan entered on the Property & Trust page. Interest deductibility depends on the use of borrowed funds, not the asset used as security.",
-            "不可抵扣债务包括自住房贷款等私人用途借款。可抵扣债务采用“住宅投资物业”页面中输入的投资物业贷款。利息能否抵扣取决于借款资金用途，而不是用于担保的资产。",
-        ))
-        surplus_profiles = {
-            "Non-deductible Offset > Non-deductible Debt > Deductible Offset > Deductible Debt > Invest": ["non_deductible_offset", "non_deductible_repayment", "deductible_offset", "deductible_repayment", "non_super"],
-            "Non-deductible Debt > Non-deductible Offset > Deductible Offset > Invest": ["non_deductible_repayment", "non_deductible_offset", "deductible_offset", "non_super"],
-            "Deductible Debt > Deductible Offset > Non-deductible Debt > Invest": ["deductible_repayment", "deductible_offset", "non_deductible_repayment", "non_super"],
-            "Cash Reserve > Non-deductible Offset > Invest": ["cash_reserve", "non_deductible_offset", "non_super"],
-            "Invest All Surplus": ["non_super"],
-        }
-        surplus_allocation_profile = st.selectbox(
-            t("Annual Surplus Allocation", "年度盈余分配"),
-            options=list(surplus_profiles),
-            index=list(surplus_profiles).index(st.session_state.get("surplus_allocation_profile", next(iter(surplus_profiles)))),
-            help=t("The first destination is filled to its available limit before the next destination is used.", "模型先把第一项填至可用上限，再把剩余盈余分配至下一项。"),
-        )
-        surplus_allocation_order = surplus_profiles[surplus_allocation_profile]
-        db1, db2, db3 = st.columns(3)
-        with db1:
-            non_deductible_debt_balance = currency_text_input(
-                t("Opening Non-deductible Debt", "期初不可抵扣债务"),
-                st.session_state.non_deductible_debt_balance,
-                "non_deductible_debt_balance_input",
-                help_text=t("For example, private home-loan or personal borrowing balances.", "例如自住房贷款或其他私人用途借款余额。"),
+        if module_non_super_enabled:
+            st.divider()
+            st.subheader(t("2026 Budget CGT Reform", "2026 Budget CGT 改革"))
+            st.caption(t(
+                "From 2027-28, the pooled model separates deferred pre-1 July 2027 gains from indexed real gains and estimates the Division 119 30% minimum-tax top-up.",
+                "从 2027–28 财年起，汇总资产池会区分 2027年7月1日前递延增值与指数化后的实际增值，并估算 Division 119 的 30% 最低税补税。",
+            ))
+            cgt_reform_enabled = st.checkbox(
+                t("Apply legislated 2026 Budget CGT reform", "应用已立法的 2026 Budget CGT 改革"),
+                value=bool(st.session_state.cgt_reform_enabled),
             )
-            non_deductible_interest_rate = percentage_text_input(
-                t("Non-deductible Interest Rate", "不可抵扣债务利率"),
-                st.session_state.non_deductible_interest_rate,
-                "non_deductible_interest_rate_input",
-                decimals=2,
-            )
-        with db2:
-            non_deductible_offset_balance = currency_text_input(
-                t("Opening Non-deductible Offset", "期初不可抵扣 Offset"),
-                st.session_state.non_deductible_offset_balance,
-                "non_deductible_offset_balance_input",
-            )
-            deductible_offset_balance = currency_text_input(
-                t("Opening Deductible-debt Offset", "期初可抵扣债务 Offset"),
-                st.session_state.deductible_offset_balance,
-                "deductible_offset_balance_input",
-                help_text=t("Linked to the modelled investment-property loan.", "与模型中的投资物业贷款相连接。"),
-            )
-        with db3:
-            cash_reserve_target = currency_text_input(
-                t("Cash Reserve Target", "现金储备目标"),
-                st.session_state.cash_reserve_target,
-                "cash_reserve_target_input",
-                help_text=t("Used only by strategies that allocate surplus to Cash Reserve.", "仅供把盈余分配至现金储备的策略使用。"),
-            )
-            st.metric(
-                t("Opening Net Non-deductible Debt", "期初净不可抵扣债务"),
-                f"${max(non_deductible_debt_balance - non_deductible_offset_balance, 0):,.0f}",
-            )
-
-        st.divider()
-        st.subheader(t("2026 Budget CGT Reform", "2026 Budget CGT 改革"))
-        st.caption(t(
-            "From 2027-28, the pooled model separates deferred pre-1 July 2027 gains from indexed real gains and estimates the Division 119 30% minimum-tax top-up.",
-            "从 2027–28 财年起，汇总资产池会区分 2027年7月1日前递延增值与指数化后的实际增值，并估算 Division 119 的 30% 最低税补税。",
-        ))
-        cgt_reform_enabled = st.checkbox(
-            t("Apply legislated 2026 Budget CGT reform", "应用已立法的 2026 Budget CGT 改革"),
-            value=bool(st.session_state.cgt_reform_enabled),
-        )
-        cg1, cg2, cg3 = st.columns(3)
-        with cg1:
-            cgt_asset_acquired_before_2027 = st.checkbox(
-                t("Pool held before 1 July 2027", "资产池在 2027年7月1日前已持有"),
-                value=bool(st.session_state.cgt_asset_acquired_before_2027),
-            )
-            non_super_transition_value_2027 = currency_text_input(
-                t("Market Value at 30 June 2027", "2027年6月30日市场价值"),
-                st.session_state.non_super_transition_value_2027,
-                "non_super_transition_value_2027_input",
-                help_text=t("Used to split protected pre-reform gains from post-reform real gains.", "用于区分改革前受保护增值与改革后的实际增值。"),
-            )
-        with cg2:
-            non_super_opening_capital_losses = currency_text_input(
-                t("Opening Carried-Forward Capital Losses", "期初结转资本亏损"),
-                st.session_state.non_super_opening_capital_losses,
-                "non_super_opening_capital_losses_input",
-            )
-            cgt_indexation_rate = percentage_text_input(
-                t("Annual CPI Indexation Estimate", "年度 CPI 指数化估计"),
-                st.session_state.cgt_indexation_rate,
-                "cgt_indexation_rate_input",
-                decimals=2,
-                help_text=t("Projection estimate only; actual tax calculations use published CPI index numbers.", "仅用于预测；实际报税应使用正式公布的 CPI 指数。"),
-            )
-        with cg3:
-            cgt_asset_category = st.selectbox(
-                t("CGT Asset Category", "CGT 资产类别"),
-                options=["Other", "New residential dwelling", "Affordable housing"],
-                index=["Other", "New residential dwelling", "Affordable housing"].index(st.session_state.cgt_asset_category),
-            )
-            cgt_new_residential_method = st.selectbox(
-                t("New/Affordable Housing Method", "新建／可负担住房计算方式"),
-                options=["Indexation and 30% minimum tax", "50% discount"],
-                index=["Indexation and 30% minimum tax", "50% discount"].index(st.session_state.cgt_new_residential_method),
-                help=t("Relevant only when the asset category is new residential dwelling or affordable housing.", "仅在资产类别为新建住宅或可负担住房时适用。"),
-            )
-        cge1, cge2 = st.columns(2)
-        with cge1:
-            cgt_held_at_least_12_months = st.checkbox(
-                t("Asset pool held at least 12 months", "资产池持有至少 12 个月"),
-                value=bool(st.session_state.cgt_held_at_least_12_months),
-            )
-        with cge2:
-            cgt_minimum_tax_exempt = st.checkbox(
-                t("Minimum-tax exemption confirmed", "已确认符合最低税豁免"),
-                value=bool(st.session_state.cgt_minimum_tax_exempt),
-                help=t("Use only for a confirmed statutory payment-recipient exemption.", "仅在确认符合法定政府付款领取者豁免时使用。"),
-            )
-        st.warning(t(
-            "This is a homogeneous pooled-asset estimate. The 1 July 2027 transition allocation and annual CPI projection must be replaced with actual asset records and published CPI for tax return work.",
-            "这是同质化资产池估算。用于报税时，必须以实际资产记录和正式 CPI 替换 2027年7月1日过渡分配及年度 CPI 预测。",
-        ))
+            cg1, cg2, cg3 = st.columns(3)
+            with cg1:
+                cgt_asset_acquired_before_2027 = st.checkbox(
+                    t("Pool held before 1 July 2027", "资产池在 2027年7月1日前已持有"),
+                    value=bool(st.session_state.cgt_asset_acquired_before_2027),
+                )
+                non_super_transition_value_2027 = currency_text_input(
+                    t("Market Value at 30 June 2027", "2027年6月30日市场价值"),
+                    st.session_state.non_super_transition_value_2027,
+                    "non_super_transition_value_2027_input",
+                    help_text=t("Used to split protected pre-reform gains from post-reform real gains.", "用于区分改革前受保护增值与改革后的实际增值。"),
+                )
+            with cg2:
+                non_super_opening_capital_losses = currency_text_input(
+                    t("Opening Carried-Forward Capital Losses", "期初结转资本亏损"),
+                    st.session_state.non_super_opening_capital_losses,
+                    "non_super_opening_capital_losses_input",
+                )
+                cgt_indexation_rate = percentage_text_input(
+                    t("Annual CPI Indexation Estimate", "年度 CPI 指数化估计"),
+                    st.session_state.cgt_indexation_rate,
+                    "cgt_indexation_rate_input",
+                    decimals=2,
+                    help_text=t("Projection estimate only; actual tax calculations use published CPI index numbers.", "仅用于预测；实际报税应使用正式公布的 CPI 指数。"),
+                )
+            with cg3:
+                cgt_asset_category = st.selectbox(
+                    t("CGT Asset Category", "CGT 资产类别"),
+                    options=["Other", "New residential dwelling", "Affordable housing"],
+                    index=["Other", "New residential dwelling", "Affordable housing"].index(st.session_state.cgt_asset_category),
+                )
+                cgt_new_residential_method = st.selectbox(
+                    t("New/Affordable Housing Method", "新建／可负担住房计算方式"),
+                    options=["Indexation and 30% minimum tax", "50% discount"],
+                    index=["Indexation and 30% minimum tax", "50% discount"].index(st.session_state.cgt_new_residential_method),
+                    help=t("Relevant only when the asset category is new residential dwelling or affordable housing.", "仅在资产类别为新建住宅或可负担住房时适用。"),
+                )
+            cge1, cge2 = st.columns(2)
+            with cge1:
+                cgt_held_at_least_12_months = st.checkbox(
+                    t("Asset pool held at least 12 months", "资产池持有至少 12 个月"),
+                    value=bool(st.session_state.cgt_held_at_least_12_months),
+                )
+            with cge2:
+                cgt_minimum_tax_exempt = st.checkbox(
+                    t("Minimum-tax exemption confirmed", "已确认符合最低税豁免"),
+                    value=bool(st.session_state.cgt_minimum_tax_exempt),
+                    help=t("Use only for a confirmed statutory payment-recipient exemption.", "仅在确认符合法定政府付款领取者豁免时使用。"),
+                )
+            st.warning(t(
+                "This is a homogeneous pooled-asset estimate. The 1 July 2027 transition allocation and annual CPI projection must be replaced with actual asset records and published CPI for tax return work.",
+                "这是同质化资产池估算。用于报税时，必须以实际资产记录和正式 CPI 替换 2027年7月1日过渡分配及年度 CPI 预测。",
+            ))
 
     elif active_input_section == "property_trust":
-        st.subheader(t("Residential Investment Property", "住宅投资物业"))
+        st.subheader(t("Main Residence", "主住宅"))
         st.caption(t(
-            "Models one aggregate residential investment. Loss quarantine starts in 2027-28 for affected established properties.",
-            "以一个汇总住宅投资建模。受影响的存量住宅从 2027–28 财年起适用亏损隔离。",
+            "The main residence and its principal-and-interest home loan are always modelled here. This home loan is not part of the Investment Debt module.",
+            "主住宅及其本息同还贷款始终在此建模；该自住房贷款不属于“投资债务”模块。",
         ))
-        residential_property_enabled = st.checkbox(
-            t("Include residential investment property", "纳入住宅投资物业"),
-            value=bool(st.session_state.residential_property_enabled),
-        )
-        rp1, rp2, rp3 = st.columns(3)
-        with rp1:
-            residential_property_value = currency_text_input(
-                t("Opening Property Value", "期初物业价值"),
-                st.session_state.residential_property_value,
-                "residential_property_value_input",
+        mr1, mr2, mr3 = st.columns(3)
+        with mr1:
+            main_residence_value = currency_text_input(
+                t("Main Residence Value", "主住宅价值"),
+                st.session_state.main_residence_value,
+                "main_residence_value_input",
             )
-            residential_property_gross_rent = currency_text_input(
-                t("Annual Gross Rent", "年度租金总收入"),
-                st.session_state.residential_property_gross_rent,
-                "residential_property_gross_rent_input",
-            )
-            residential_property_capital_growth_rate = percentage_text_input(
-                t("Property Capital Growth", "物业资本增长率"),
-                st.session_state.residential_property_capital_growth_rate,
-                "residential_property_capital_growth_rate_input",
+            main_residence_capital_growth_rate = percentage_text_input(
+                t("Main Residence Capital Growth", "主住宅资本增长率"),
+                st.session_state.main_residence_capital_growth_rate,
+                "main_residence_capital_growth_rate_input",
                 decimals=1,
             )
-        with rp2:
-            residential_property_loan_balance = currency_text_input(
-                t("Interest-Only Loan Balance", "只付息贷款余额"),
-                st.session_state.residential_property_loan_balance,
-                "residential_property_loan_balance_input",
+        with mr2:
+            main_residence_loan_balance = currency_text_input(
+                t("Home Loan Balance (Principal & Interest)", "自住房贷款余额（本息同还）"),
+                st.session_state.main_residence_loan_balance,
+                "main_residence_loan_balance_input",
             )
-            residential_property_operating_expenses = currency_text_input(
-                t("Annual Deductible Expenses", "年度可扣除费用"),
-                st.session_state.residential_property_operating_expenses,
-                "residential_property_operating_expenses_input",
-                help_text=t("Excludes loan interest, which is calculated separately.", "不含贷款利息；利息会单独计算。"),
-            )
-            residential_property_interest_rate = percentage_text_input(
-                t("Loan Interest Rate", "贷款利率"),
-                st.session_state.residential_property_interest_rate,
-                "residential_property_interest_rate_input",
+            main_residence_interest_rate = percentage_text_input(
+                t("Home Loan Interest Rate", "自住房贷款利率"),
+                st.session_state.main_residence_interest_rate,
+                "main_residence_interest_rate_input",
                 decimals=2,
             )
-        with rp3:
-            residential_property_opening_quarantined_loss = currency_text_input(
-                t("Opening Quarantined Loss", "期初隔离亏损"),
-                st.session_state.residential_property_opening_quarantined_loss,
-                "residential_property_opening_quarantined_loss_input",
+        with mr3:
+            main_residence_annual_loan_repayment = currency_text_input(
+                t("Annual Home Loan Repayment", "自住房贷款年度还款额"),
+                st.session_state.main_residence_annual_loan_repayment,
+                "main_residence_annual_loan_repayment_input",
+                help_text=t("Total annual principal-and-interest repayment, excluding optional extra repayments.", "年度本息还款总额，不包括可选的额外还款。"),
             )
-            residential_property_rent_growth_rate = percentage_text_input(
-                t("Rent Growth", "租金增长率"),
-                st.session_state.residential_property_rent_growth_rate,
-                "residential_property_rent_growth_rate_input",
-                decimals=1,
-            )
-            residential_property_expense_growth_rate = percentage_text_input(
-                t("Expense Growth", "费用增长率"),
-                st.session_state.residential_property_expense_growth_rate,
-                "residential_property_expense_growth_rate_input",
-                decimals=1,
-            )
-            residential_property_sale_cost_rate = percentage_text_input(
-                t("Estimated Sale Costs", "预计出售成本"),
-                st.session_state.residential_property_sale_cost_rate,
-                "residential_property_sale_cost_rate_input",
-                decimals=2,
-                help_text=t("Applied proportionally when the drawdown strategy uses part or all of the property equity. Property CGT is not yet modelled.", "当资产提取策略使用部分或全部物业净值时按比例计入。物业 CGT 尚未建模。"),
+            main_residence_offset_balance = currency_text_input(
+                t("Home Loan Offset Balance", "自住房贷款 Offset 余额"),
+                st.session_state.main_residence_offset_balance,
+                "main_residence_offset_balance_input",
             )
 
-        rq1, rq2, rq3 = st.columns(3)
-        with rq1:
-            residential_property_acquired_before_budget_time = st.checkbox(
-                t("Acquired before 7:30pm AEST 12 May 2026", "在 2026年5月12日 AEST 19:30 前取得"),
-                value=bool(st.session_state.residential_property_acquired_before_budget_time),
-            )
-        with rq2:
-            residential_property_is_new_build = st.checkbox(
-                t("Qualifying new build", "符合条件的新建住宅"),
-                value=bool(st.session_state.residential_property_is_new_build),
-            )
-        with rq3:
-            residential_property_is_exempt_housing = st.checkbox(
-                t("Qualifying exempt housing", "符合条件的豁免住房"),
-                value=bool(st.session_state.residential_property_is_exempt_housing),
-                help=t("Use only after confirming the statutory housing exception.", "仅在确认符合法定住房例外后使用。"),
-            )
+        if module_property_enabled:
+            st.divider()
+            st.subheader(t("Residential Investment Property", "住宅投资物业"))
+            st.caption(t(
+                "Models one aggregate residential investment. Loss quarantine starts in 2027-28 for affected established properties.",
+                "以一个汇总住宅投资建模。受影响的存量住宅从 2027–28 财年起适用亏损隔离。",
+            ))
+            residential_property_enabled = True
+            st.caption(t("Enabled in Client Modules.", "已在客户模块中启用。"))
+            rp1, rp2, rp3 = st.columns(3)
+            with rp1:
+                residential_property_value = currency_text_input(
+                    t("Opening Property Value", "期初物业价值"),
+                    st.session_state.residential_property_value,
+                    "residential_property_value_input",
+                )
+                residential_property_gross_rent = currency_text_input(
+                    t("Annual Gross Rent", "年度租金总收入"),
+                    st.session_state.residential_property_gross_rent,
+                    "residential_property_gross_rent_input",
+                )
+                residential_property_capital_growth_rate = percentage_text_input(
+                    t("Property Capital Growth", "物业资本增长率"),
+                    st.session_state.residential_property_capital_growth_rate,
+                    "residential_property_capital_growth_rate_input",
+                    decimals=1,
+                )
+            with rp2:
+                residential_property_loan_balance = currency_text_input(
+                    t("Investment Property Loan Balance (Principal & Interest)", "投资物业贷款余额（本息同还）"),
+                    st.session_state.residential_property_loan_balance,
+                    "residential_property_loan_balance_input",
+                )
+                residential_property_operating_expenses = currency_text_input(
+                    t("Annual Deductible Expenses", "年度可扣除费用"),
+                    st.session_state.residential_property_operating_expenses,
+                    "residential_property_operating_expenses_input",
+                    help_text=t("Excludes loan interest, which is calculated separately.", "不含贷款利息；利息会单独计算。"),
+                )
+                residential_property_interest_rate = percentage_text_input(
+                    t("Loan Interest Rate", "贷款利率"),
+                    st.session_state.residential_property_interest_rate,
+                    "residential_property_interest_rate_input",
+                    decimals=2,
+                )
+                residential_property_annual_loan_repayment = currency_text_input(
+                    t("Annual Property Loan Repayment", "投资物业贷款年度还款额"),
+                    st.session_state.residential_property_annual_loan_repayment,
+                    "residential_property_annual_loan_repayment_input",
+                    help_text=t("Total annual principal-and-interest repayment, excluding optional extra repayments.", "年度本息还款总额，不包括可选的额外还款。"),
+                )
+                deductible_offset_balance = currency_text_input(
+                    t("Investment Property Loan Offset", "投资物业贷款 Offset"),
+                    st.session_state.deductible_offset_balance,
+                    "residential_property_offset_balance_input",
+                )
+            with rp3:
+                residential_property_opening_quarantined_loss = currency_text_input(
+                    t("Opening Quarantined Loss", "期初隔离亏损"),
+                    st.session_state.residential_property_opening_quarantined_loss,
+                    "residential_property_opening_quarantined_loss_input",
+                )
+                residential_property_rent_growth_rate = percentage_text_input(
+                    t("Rent Growth", "租金增长率"),
+                    st.session_state.residential_property_rent_growth_rate,
+                    "residential_property_rent_growth_rate_input",
+                    decimals=1,
+                )
+                residential_property_expense_growth_rate = percentage_text_input(
+                    t("Expense Growth", "费用增长率"),
+                    st.session_state.residential_property_expense_growth_rate,
+                    "residential_property_expense_growth_rate_input",
+                    decimals=1,
+                )
+                residential_property_sale_cost_rate = percentage_text_input(
+                    t("Estimated Sale Costs", "预计出售成本"),
+                    st.session_state.residential_property_sale_cost_rate,
+                    "residential_property_sale_cost_rate_input",
+                    decimals=2,
+                    help_text=t("Applied proportionally when the drawdown strategy uses part or all of the property equity. Property CGT is not yet modelled.", "当资产提取策略使用部分或全部物业净值时按比例计入。物业 CGT 尚未建模。"),
+                )
 
-        if is_one_person_mode:
-            residential_property_ownership_person1 = 100.0
-        else:
-            residential_property_ownership_person1 = percentage_text_input(
-                t("Person 1 Property Ownership", "人物 1 物业持有比例"),
-                st.session_state.residential_property_ownership_person1_pct / 100.0,
-                "residential_property_ownership_person1_input",
-                decimals=1,
-            ) * 100.0
+            rq1, rq2, rq3 = st.columns(3)
+            with rq1:
+                residential_property_acquired_before_budget_time = st.checkbox(
+                    t("Acquired before 7:30pm AEST 12 May 2026", "在 2026年5月12日 AEST 19:30 前取得"),
+                    value=bool(st.session_state.residential_property_acquired_before_budget_time),
+                )
+            with rq2:
+                residential_property_is_new_build = st.checkbox(
+                    t("Qualifying new build", "符合条件的新建住宅"),
+                    value=bool(st.session_state.residential_property_is_new_build),
+                )
+            with rq3:
+                residential_property_is_exempt_housing = st.checkbox(
+                    t("Qualifying exempt housing", "符合条件的豁免住房"),
+                    value=bool(st.session_state.residential_property_is_exempt_housing),
+                    help=t("Use only after confirming the statutory housing exception.", "仅在确认符合法定住房例外后使用。"),
+                )
 
-        st.divider()
-        st.subheader(t("Discretionary Trust Minimum Tax", "Discretionary Trust 最低税"))
+            if is_one_person_mode:
+                residential_property_ownership_person1 = 100.0
+            else:
+                residential_property_ownership_person1 = percentage_text_input(
+                    t("Person 1 Property Ownership", "人物 1 物业持有比例"),
+                    st.session_state.residential_property_ownership_person1_pct / 100.0,
+                    "residential_property_ownership_person1_input",
+                    decimals=1,
+                ) * 100.0
+
+        if False and module_trust_enabled:
+            st.divider()
+            st.subheader(t("Discretionary Trust Minimum Tax", "Discretionary Trust 最低税"))
+            st.warning(t(
+                "Policy scenario only: the 30% minimum tax is based on the September 2026 exposure draft and is not enacted law.",
+                "仅作政策情景：30% 最低税依据 2026 年 9 月 exposure draft，目前尚未立法。",
+            ))
+            discretionary_trust_enabled = True
+            st.caption(t("Enabled in Client Modules.", "已在客户模块中启用。"))
+            dt1, dt2, dt3 = st.columns(3)
+            with dt1:
+                discretionary_trust_net_income = currency_text_input(
+                    t("Annual Trust Net Income", "年度信托净收入"),
+                    st.session_state.discretionary_trust_net_income,
+                    "discretionary_trust_net_income_input",
+                )
+            with dt2:
+                discretionary_trust_excluded_income = currency_text_input(
+                    t("Excluded Income", "豁免收入"),
+                    st.session_state.discretionary_trust_excluded_income,
+                    "discretionary_trust_excluded_income_input",
+                    help_text=t("For example, confirmed primary production or other draft-law exclusions.", "例如已确认的 primary production 或草案列明的其他豁免收入。"),
+                )
+            with dt3:
+                discretionary_trust_income_growth_rate = percentage_text_input(
+                    t("Trust Income Growth", "信托收入增长率"),
+                    st.session_state.discretionary_trust_income_growth_rate,
+                    "discretionary_trust_income_growth_rate_input",
+                    decimals=1,
+                )
+            discretionary_trust_subject_to_minimum_tax = st.checkbox(
+                t("Trust is subject to the draft minimum tax", "该信托适用最低税草案"),
+                value=bool(st.session_state.discretionary_trust_subject_to_minimum_tax),
+                help=t("Turn off for a confirmed excluded trust or a valid fixed-distribution election scenario.", "若已确认属于豁免信托或有效选择固定分配情景，可关闭。"),
+            )
+            if is_one_person_mode:
+                discretionary_trust_ownership_person1 = 100.0
+            else:
+                discretionary_trust_ownership_person1 = percentage_text_input(
+                    t("Person 1 Trust Distribution", "人物 1 信托分配比例"),
+                    st.session_state.discretionary_trust_ownership_person1_pct / 100.0,
+                    "discretionary_trust_ownership_person1_input",
+                    decimals=1,
+                ) * 100.0
+
+    elif active_input_section == "trust":
+        st.subheader(t("Discretionary Trust Investment Pool", "Discretionary Trust 投资池"))
         st.warning(t(
             "Policy scenario only: the 30% minimum tax is based on the September 2026 exposure draft and is not enacted law.",
             "仅作政策情景：30% 最低税依据 2026 年 9 月 exposure draft，目前尚未立法。",
         ))
-        discretionary_trust_enabled = st.checkbox(
-            t("Include discretionary trust income", "纳入 discretionary trust 收入"),
-            value=bool(st.session_state.discretionary_trust_enabled),
-        )
+        st.caption(t(
+            "Trust income is derived from the opening balance and return assumptions below; it is not entered as a separate gross or net income amount.",
+            "信托收入由期初余额及以下回报率自动计算，不再单独输入 gross income 或 net income。",
+        ))
+        discretionary_trust_enabled = True
         dt1, dt2, dt3 = st.columns(3)
         with dt1:
-            discretionary_trust_net_income = currency_text_input(
-                t("Annual Trust Net Income", "年度信托净收入"),
-                st.session_state.discretionary_trust_net_income,
-                "discretionary_trust_net_income_input",
+            discretionary_trust_balance = currency_text_input(
+                t("Opening Trust Balance", "期初信托资产余额"),
+                st.session_state.discretionary_trust_balance,
+                "discretionary_trust_balance_input",
+            )
+            discretionary_trust_cost_base = currency_text_input(
+                t("Opening Trust Cost Base", "期初信托成本基础"),
+                st.session_state.discretionary_trust_cost_base,
+                "discretionary_trust_cost_base_input",
             )
         with dt2:
-            discretionary_trust_excluded_income = currency_text_input(
-                t("Excluded Income", "豁免收入"),
-                st.session_state.discretionary_trust_excluded_income,
-                "discretionary_trust_excluded_income_input",
-                help_text=t("For example, confirmed primary production or other draft-law exclusions.", "例如已确认的 primary production 或草案列明的其他豁免收入。"),
-            )
-        with dt3:
-            discretionary_trust_income_growth_rate = percentage_text_input(
-                t("Trust Income Growth", "信托收入增长率"),
-                st.session_state.discretionary_trust_income_growth_rate,
-                "discretionary_trust_income_growth_rate_input",
+            discretionary_trust_income_return_mean = percentage_text_input(
+                t("Trust Income Return Mean", "信托收益型回报均值"),
+                st.session_state.discretionary_trust_income_return_mean,
+                "discretionary_trust_income_return_mean_input",
                 decimals=1,
             )
+            discretionary_trust_income_return_std = percentage_text_input(
+                t("Trust Income Return Std", "信托收益型回报波动"),
+                st.session_state.discretionary_trust_income_return_std,
+                "discretionary_trust_income_return_std_input",
+                decimals=1,
+            )
+        with dt3:
+            discretionary_trust_capital_return_mean = percentage_text_input(
+                t("Trust Capital Return Mean", "信托资本增值回报均值"),
+                st.session_state.discretionary_trust_capital_return_mean,
+                "discretionary_trust_capital_return_mean_input",
+                decimals=1,
+            )
+            discretionary_trust_capital_return_std = percentage_text_input(
+                t("Trust Capital Return Std", "信托资本增值回报波动"),
+                st.session_state.discretionary_trust_capital_return_std,
+                "discretionary_trust_capital_return_std_input",
+                decimals=1,
+            )
+        discretionary_trust_excluded_income_pct = percentage_text_input(
+            t("Excluded Income % of Total Trust Income", "豁免收入占信托总收入比例"),
+            st.session_state.discretionary_trust_excluded_income_pct,
+            "discretionary_trust_excluded_income_pct_input",
+            decimals=1,
+            help_text=t("Enter the confirmed excluded share as a percentage of modelled trust income.", "按模型计算的信托总收入输入已确认的豁免比例。"),
+        )
         discretionary_trust_subject_to_minimum_tax = st.checkbox(
             t("Trust is subject to the draft minimum tax", "该信托适用最低税草案"),
             value=bool(st.session_state.discretionary_trust_subject_to_minimum_tax),
-            help=t("Turn off for a confirmed excluded trust or a valid fixed-distribution election scenario.", "若已确认属于豁免信托或有效选择固定分配情景，可关闭。"),
         )
         if is_one_person_mode:
             discretionary_trust_ownership_person1 = 100.0
@@ -2924,6 +3271,115 @@ with st.form("input_editor_form", clear_on_submit=False):
                 "discretionary_trust_ownership_person1_input",
                 decimals=1,
             ) * 100.0
+
+    elif active_input_section == "cash_surplus":
+        st.subheader(t("Cash Surplus Strategy", "现金盈余策略"))
+        st.caption(t(
+            "Choose where annual surplus cash is directed after spending, tax, contributions and scheduled principal-and-interest loan payments.",
+            "选择在支出、税款、缴款及计划内本息还款之后，年度现金盈余的优先去向。",
+        ))
+        candidate_surplus_profiles = {
+            "Home Offset > Home Loan > Cash Reserve > Invest": ["main_residence_offset", "main_residence_repayment", "cash_reserve", "non_super"],
+            "Cash Reserve > Home Offset > Invest": ["cash_reserve", "main_residence_offset", "non_super"],
+            "Investment Debt > Property Loan > Invest": ["non_deductible_repayment", "investment_deductible_repayment", "property_loan_repayment", "non_super"],
+            "Offsets First > Invest": ["main_residence_offset", "property_loan_offset", "non_deductible_offset", "investment_deductible_offset", "non_super"],
+            "Invest All Surplus": ["non_super"],
+        }
+        allowed_surplus_destinations = {"cash_reserve", "main_residence_offset", "main_residence_repayment"}
+        if module_non_super_enabled:
+            allowed_surplus_destinations.add("non_super")
+        if module_property_enabled:
+            allowed_surplus_destinations.update({"property_loan_offset", "property_loan_repayment"})
+        if module_investment_debt_enabled:
+            allowed_surplus_destinations.update({"non_deductible_offset", "non_deductible_repayment", "investment_deductible_offset", "investment_deductible_repayment"})
+        surplus_destination_labels = {
+            "cash_reserve": t("Cash Reserve", "现金储备"),
+            "non_super": t("Non-super Investment", "非 Super 投资"),
+            "main_residence_offset": t("Home Loan Offset", "自住房贷款 Offset"),
+            "main_residence_repayment": t("Home Loan Repayment", "自住房贷款还款"),
+            "property_loan_offset": t("Property Loan Offset", "投资物业贷款 Offset"),
+            "property_loan_repayment": t("Property Loan Repayment", "投资物业贷款还款"),
+            "non_deductible_offset": t("Non-deductible Investment Offset", "不可抵扣投资债务 Offset"),
+            "non_deductible_repayment": t("Non-deductible Investment Debt", "不可抵扣投资债务"),
+            "investment_deductible_offset": t("Deductible Investment Offset", "可抵扣投资债务 Offset"),
+            "investment_deductible_repayment": t("Deductible Investment Debt", "可抵扣投资债务"),
+        }
+        surplus_profiles = {}
+        for candidate_order in candidate_surplus_profiles.values():
+            filtered_order = [item for item in candidate_order if item in allowed_surplus_destinations]
+            if not filtered_order:
+                filtered_order = ["cash_reserve"]
+            filtered_label = " > ".join(surplus_destination_labels[item] for item in filtered_order)
+            surplus_profiles.setdefault(filtered_label, filtered_order)
+        current_surplus_profile = st.session_state.get("surplus_allocation_profile", "")
+        surplus_profile_index = list(surplus_profiles).index(current_surplus_profile) if current_surplus_profile in surplus_profiles else 0
+        surplus_allocation_profile = st.selectbox(
+            t("Annual Surplus Allocation", "年度盈余分配"),
+            options=list(surplus_profiles),
+            index=surplus_profile_index,
+        )
+        surplus_allocation_order = surplus_profiles[surplus_allocation_profile]
+        cash_reserve_target = currency_text_input(
+            t("Cash Reserve Target", "现金储备目标"),
+            st.session_state.cash_reserve_target,
+            "cash_reserve_target_input",
+        )
+
+    elif active_input_section == "investment_debt":
+        st.subheader(t("Investment Debt", "投资债务"))
+        st.info(t(
+            "This module excludes the main-residence home loan. It also excludes the deductible residential-investment-property loan when that module is active; both are entered on the Property page.",
+            "本模块不包括主住宅贷款；启用住宅投资物业时，也不包括该物业的可抵扣贷款。这两类贷款均在“物业”页面输入。",
+        ))
+        id1, id2 = st.columns(2)
+        with id1:
+            st.markdown(f"#### {t('Other Non-deductible Investment Debt', '其他不可抵扣投资债务')}")
+            non_deductible_debt_balance = currency_text_input(
+                t("Opening Balance", "期初余额"),
+                st.session_state.non_deductible_debt_balance,
+                "non_deductible_debt_balance_input",
+            )
+            non_deductible_interest_rate = percentage_text_input(
+                t("Interest Rate", "利率"),
+                st.session_state.non_deductible_interest_rate,
+                "non_deductible_interest_rate_input",
+                decimals=2,
+            )
+            non_deductible_annual_repayment = currency_text_input(
+                t("Annual Repayment", "年度还款额"),
+                st.session_state.non_deductible_annual_repayment,
+                "non_deductible_annual_repayment_input",
+                help_text=t("Total annual principal-and-interest repayment, excluding optional extra repayments.", "年度本息还款总额，不包括可选的额外还款。"),
+            )
+            non_deductible_offset_balance = currency_text_input(
+                t("Offset Balance", "Offset 余额"),
+                st.session_state.non_deductible_offset_balance,
+                "non_deductible_offset_balance_input",
+            )
+        with id2:
+            st.markdown(f"#### {t('Other Deductible Investment Debt', '其他可抵扣投资债务')}")
+            investment_deductible_debt_balance = currency_text_input(
+                t("Opening Balance", "期初余额"),
+                st.session_state.investment_deductible_debt_balance,
+                "investment_deductible_debt_balance_input",
+            )
+            investment_deductible_interest_rate = percentage_text_input(
+                t("Interest Rate", "利率"),
+                st.session_state.investment_deductible_interest_rate,
+                "investment_deductible_interest_rate_input",
+                decimals=2,
+            )
+            investment_deductible_annual_repayment = currency_text_input(
+                t("Annual Repayment", "年度还款额"),
+                st.session_state.investment_deductible_annual_repayment,
+                "investment_deductible_annual_repayment_input",
+                help_text=t("Total annual principal-and-interest repayment, excluding optional extra repayments.", "年度本息还款总额，不包括可选的额外还款。"),
+            )
+            investment_deductible_offset_balance = currency_text_input(
+                t("Offset Balance", "Offset 余额"),
+                st.session_state.investment_deductible_offset_balance,
+                "investment_deductible_offset_balance_input",
+            )
 
     elif active_input_section == "contributions":
         st.subheader(t("Contribution Schedule", "缴款计划"))
@@ -2967,20 +3423,21 @@ with st.form("input_editor_form", clear_on_submit=False):
             st.subheader(t("Return Assumptions", "回报假设"))
             r1, r2, r3 = st.columns(3)
             with r1:
-                super_income_return_mean = percentage_text_input(
-                    t("Super Income Return Mean", "养老金收益型回报均值"),
-                    st.session_state.super_income_return_mean,
-                    "super_income_return_mean_input",
-                    decimals=1,
-                    help_text=t("Expected annual income-style return on super assets.", "养老金资产的年度收益型回报假设。"),
-                )
-                super_capital_return_mean = percentage_text_input(
-                    t("Super Capital Return Mean", "养老金资本增值回报均值"),
-                    st.session_state.super_capital_return_mean,
-                    "super_capital_return_mean_input",
-                    decimals=1,
-                    help_text=t("Expected annual capital growth on super assets.", "养老金资产的年度资本增值回报假设。"),
-                )
+                if module_super_enabled:
+                    super_income_return_mean = percentage_text_input(
+                        t("Super Income Return Mean", "养老金收益型回报均值"),
+                        st.session_state.super_income_return_mean,
+                        "super_income_return_mean_input",
+                        decimals=1,
+                        help_text=t("Expected annual income-style return on super assets.", "养老金资产的年度收益型回报假设。"),
+                    )
+                    super_capital_return_mean = percentage_text_input(
+                        t("Super Capital Return Mean", "养老金资本增值回报均值"),
+                        st.session_state.super_capital_return_mean,
+                        "super_capital_return_mean_input",
+                        decimals=1,
+                        help_text=t("Expected annual capital growth on super assets.", "养老金资产的年度资本增值回报假设。"),
+                    )
                 inflation_rate = percentage_text_input(
                     t("Inflation Rate", "通胀率"),
                     st.session_state.inflation_rate,
@@ -2989,43 +3446,45 @@ with st.form("input_editor_form", clear_on_submit=False):
                     help_text=t("Inflation used to index salary and spending assumptions.", "用于收入与支出递增的 inflation 假设。"),
                 )
             with r2:
-                super_income_return_std = percentage_text_input(
-                    t("Super Income Return Std", "养老金收益型回报波动"),
-                    st.session_state.super_income_return_std,
-                    "super_income_return_std_input",
-                    decimals=1,
-                )
-                super_capital_return_std = percentage_text_input(
-                    t("Super Capital Return Std", "养老金资本增值回报波动"),
-                    st.session_state.super_capital_return_std,
-                    "super_capital_return_std_input",
-                    decimals=1,
-                )
+                if module_super_enabled:
+                    super_income_return_std = percentage_text_input(
+                        t("Super Income Return Std", "养老金收益型回报波动"),
+                        st.session_state.super_income_return_std,
+                        "super_income_return_std_input",
+                        decimals=1,
+                    )
+                    super_capital_return_std = percentage_text_input(
+                        t("Super Capital Return Std", "养老金资本增值回报波动"),
+                        st.session_state.super_capital_return_std,
+                        "super_capital_return_std_input",
+                        decimals=1,
+                    )
             with r3:
-                non_super_income_return_mean = percentage_text_input(
-                    t("Non-Super Income Return Mean", "非养老金收益型回报均值"),
-                    st.session_state.non_super_income_return_mean,
-                    "non_super_income_return_mean_input",
-                    decimals=1,
-                )
-                non_super_capital_return_mean = percentage_text_input(
-                    t("Non-Super Capital Return Mean", "非养老金资本增值回报均值"),
-                    st.session_state.non_super_capital_return_mean,
-                    "non_super_capital_return_mean_input",
-                    decimals=1,
-                )
-                non_super_income_return_std = percentage_text_input(
-                    t("Non-Super Income Return Std", "非养老金收益型回报波动"),
-                    st.session_state.non_super_income_return_std,
-                    "non_super_income_return_std_input",
-                    decimals=1,
-                )
-                non_super_capital_return_std = percentage_text_input(
-                    t("Non-Super Capital Return Std", "非养老金资本增值回报波动"),
-                    st.session_state.non_super_capital_return_std,
-                    "non_super_capital_return_std_input",
-                    decimals=1,
-                )
+                if module_non_super_enabled:
+                    non_super_income_return_mean = percentage_text_input(
+                        t("Non-Super Income Return Mean", "非养老金收益型回报均值"),
+                        st.session_state.non_super_income_return_mean,
+                        "non_super_income_return_mean_input",
+                        decimals=1,
+                    )
+                    non_super_capital_return_mean = percentage_text_input(
+                        t("Non-Super Capital Return Mean", "非养老金资本增值回报均值"),
+                        st.session_state.non_super_capital_return_mean,
+                        "non_super_capital_return_mean_input",
+                        decimals=1,
+                    )
+                    non_super_income_return_std = percentage_text_input(
+                        t("Non-Super Income Return Std", "非养老金收益型回报波动"),
+                        st.session_state.non_super_income_return_std,
+                        "non_super_income_return_std_input",
+                        decimals=1,
+                    )
+                    non_super_capital_return_std = percentage_text_input(
+                        t("Non-Super Capital Return Std", "非养老金资本增值回报波动"),
+                        st.session_state.non_super_capital_return_std,
+                        "non_super_capital_return_std_input",
+                        decimals=1,
+                    )
         else:
             selected_preset = preset_choice if preset_choice in runtime_presets else "Base Case"
             selected_values = runtime_presets[selected_preset]
@@ -3038,32 +3497,23 @@ with st.form("input_editor_form", clear_on_submit=False):
                 )
             )
 
-            display_df = pd.DataFrame(
-                {
-                    t("Assumption", "假设"): [
-                        t("Super Income Return Mean", "养老金收益型回报均值"),
-                        t("Super Income Return Std", "养老金收益型回报波动"),
-                        t("Super Capital Return Mean", "养老金资本增值回报均值"),
-                        t("Super Capital Return Std", "养老金资本增值回报波动"),
-                        t("Non-Super Income Return Mean", "非养老金收益型回报均值"),
-                        t("Non-Super Income Return Std", "非养老金收益型回报波动"),
-                        t("Non-Super Capital Return Mean", "非养老金资本增值回报均值"),
-                        t("Non-Super Capital Return Std", "非养老金资本增值回报波动"),
-                        t("Inflation Rate", "通胀率"),
-                    ],
-                    t("Value", "数值"): [
-                        selected_values["super_income_return_mean"] * 100.0,
-                        selected_values["super_income_return_std"] * 100.0,
-                        selected_values["super_capital_return_mean"] * 100.0,
-                        selected_values["super_capital_return_std"] * 100.0,
-                        selected_values["non_super_income_return_mean"] * 100.0,
-                        selected_values["non_super_income_return_std"] * 100.0,
-                        selected_values["non_super_capital_return_mean"] * 100.0,
-                        selected_values["non_super_capital_return_std"] * 100.0,
-                        selected_values["inflation_rate"] * 100.0,
-                    ],
-                }
-            )
+            assumption_rows = []
+            if module_super_enabled:
+                assumption_rows.extend([
+                    (t("Super Income Return Mean", "养老金收益型回报均值"), selected_values["super_income_return_mean"] * 100.0),
+                    (t("Super Income Return Std", "养老金收益型回报波动"), selected_values["super_income_return_std"] * 100.0),
+                    (t("Super Capital Return Mean", "养老金资本增值回报均值"), selected_values["super_capital_return_mean"] * 100.0),
+                    (t("Super Capital Return Std", "养老金资本增值回报波动"), selected_values["super_capital_return_std"] * 100.0),
+                ])
+            if module_non_super_enabled:
+                assumption_rows.extend([
+                    (t("Non-Super Income Return Mean", "非养老金收益型回报均值"), selected_values["non_super_income_return_mean"] * 100.0),
+                    (t("Non-Super Income Return Std", "非养老金收益型回报波动"), selected_values["non_super_income_return_std"] * 100.0),
+                    (t("Non-Super Capital Return Mean", "非养老金资本增值回报均值"), selected_values["non_super_capital_return_mean"] * 100.0),
+                    (t("Non-Super Capital Return Std", "非养老金资本增值回报波动"), selected_values["non_super_capital_return_std"] * 100.0),
+                ])
+            assumption_rows.append((t("Inflation Rate", "通胀率"), selected_values["inflation_rate"] * 100.0))
+            display_df = pd.DataFrame(assumption_rows, columns=[t("Assumption", "假设"), t("Value", "数值")])
             st.dataframe(
                 display_df,
                 width="stretch",
@@ -3142,10 +3592,21 @@ st.session_state.non_super_cost_base = non_super_cost_base
 st.session_state.cash_reserve_balance = cash_reserve_balance
 st.session_state.cash_reserve_floor = cash_reserve_floor
 st.session_state.cash_reserve_target = cash_reserve_target
+st.session_state.main_residence_value = main_residence_value
+st.session_state.main_residence_capital_growth_rate = main_residence_capital_growth_rate
+st.session_state.main_residence_loan_balance = main_residence_loan_balance
+st.session_state.main_residence_interest_rate = main_residence_interest_rate
+st.session_state.main_residence_annual_loan_repayment = main_residence_annual_loan_repayment
+st.session_state.main_residence_offset_balance = main_residence_offset_balance
 st.session_state.non_deductible_debt_balance = non_deductible_debt_balance
 st.session_state.non_deductible_interest_rate = non_deductible_interest_rate
+st.session_state.non_deductible_annual_repayment = non_deductible_annual_repayment
 st.session_state.non_deductible_offset_balance = non_deductible_offset_balance
 st.session_state.deductible_offset_balance = deductible_offset_balance
+st.session_state.investment_deductible_debt_balance = investment_deductible_debt_balance
+st.session_state.investment_deductible_interest_rate = investment_deductible_interest_rate
+st.session_state.investment_deductible_annual_repayment = investment_deductible_annual_repayment
+st.session_state.investment_deductible_offset_balance = investment_deductible_offset_balance
 st.session_state.surplus_allocation_profile = surplus_allocation_profile
 st.session_state.surplus_allocation_order = surplus_allocation_order
 st.session_state.non_super_estate_reserve = non_super_estate_reserve
@@ -3161,10 +3622,11 @@ st.session_state.cgt_asset_category = cgt_asset_category
 st.session_state.cgt_new_residential_method = cgt_new_residential_method
 st.session_state.cgt_held_at_least_12_months = bool(cgt_held_at_least_12_months)
 st.session_state.cgt_minimum_tax_exempt = bool(cgt_minimum_tax_exempt)
-st.session_state.residential_property_enabled = bool(residential_property_enabled)
+st.session_state.residential_property_enabled = bool(module_property_enabled)
 st.session_state.residential_property_value = residential_property_value
 st.session_state.residential_property_sale_cost_rate = residential_property_sale_cost_rate
 st.session_state.residential_property_loan_balance = residential_property_loan_balance
+st.session_state.residential_property_annual_loan_repayment = residential_property_annual_loan_repayment
 st.session_state.residential_property_gross_rent = residential_property_gross_rent
 st.session_state.residential_property_operating_expenses = residential_property_operating_expenses
 st.session_state.residential_property_interest_rate = residential_property_interest_rate
@@ -3176,7 +3638,14 @@ st.session_state.residential_property_acquired_before_budget_time = bool(residen
 st.session_state.residential_property_is_new_build = bool(residential_property_is_new_build)
 st.session_state.residential_property_is_exempt_housing = bool(residential_property_is_exempt_housing)
 st.session_state.residential_property_ownership_person1_pct = residential_property_ownership_person1
-st.session_state.discretionary_trust_enabled = bool(discretionary_trust_enabled)
+st.session_state.discretionary_trust_enabled = bool(module_trust_enabled)
+st.session_state.discretionary_trust_balance = discretionary_trust_balance
+st.session_state.discretionary_trust_cost_base = discretionary_trust_cost_base
+st.session_state.discretionary_trust_income_return_mean = discretionary_trust_income_return_mean
+st.session_state.discretionary_trust_income_return_std = discretionary_trust_income_return_std
+st.session_state.discretionary_trust_capital_return_mean = discretionary_trust_capital_return_mean
+st.session_state.discretionary_trust_capital_return_std = discretionary_trust_capital_return_std
+st.session_state.discretionary_trust_excluded_income_pct = discretionary_trust_excluded_income_pct
 st.session_state.discretionary_trust_net_income = discretionary_trust_net_income
 st.session_state.discretionary_trust_excluded_income = discretionary_trust_excluded_income
 st.session_state.discretionary_trust_income_growth_rate = discretionary_trust_income_growth_rate
@@ -3242,6 +3711,16 @@ base_inputs = {
     "projection_years": int(st.session_state.projection_years),
     "retirement_spending_trigger": "Either Retired" if is_one_person_mode else st.session_state.retirement_spending_trigger,
     "household_mode": st.session_state.household_mode,
+    "module_second_person_enabled": bool(st.session_state.module_second_person_enabled),
+    "module_super_enabled": bool(st.session_state.module_super_enabled),
+    "module_pension_enabled": bool(st.session_state.module_pension_enabled),
+    "module_non_super_enabled": bool(st.session_state.module_non_super_enabled),
+    "module_property_enabled": bool(st.session_state.module_property_enabled),
+    "module_trust_enabled": bool(st.session_state.module_trust_enabled),
+    "module_cash_surplus_enabled": bool(st.session_state.module_cash_surplus_enabled),
+    "module_investment_debt_enabled": bool(st.session_state.module_investment_debt_enabled),
+    "module_non_deductible_debt_enabled": bool(st.session_state.module_investment_debt_enabled),
+    "module_deductible_debt_enabled": bool(st.session_state.module_investment_debt_enabled),
     "ui_language": st.session_state.ui_language,
     "person1_current_age": int(st.session_state.person1_current_age),
     "person2_current_age": 0 if is_one_person_mode else int(st.session_state.person2_current_age),
@@ -3260,10 +3739,21 @@ base_inputs = {
     "cash_reserve_balance": float(st.session_state.cash_reserve_balance),
     "cash_reserve_floor": float(st.session_state.cash_reserve_floor),
     "cash_reserve_target": float(st.session_state.cash_reserve_target),
+    "main_residence_value": float(st.session_state.main_residence_value),
+    "main_residence_capital_growth_rate": float(st.session_state.main_residence_capital_growth_rate),
+    "main_residence_loan_balance": float(st.session_state.main_residence_loan_balance),
+    "main_residence_interest_rate": float(st.session_state.main_residence_interest_rate),
+    "main_residence_annual_loan_repayment": float(st.session_state.main_residence_annual_loan_repayment),
+    "main_residence_offset_balance": float(st.session_state.main_residence_offset_balance),
     "non_deductible_debt_balance": float(st.session_state.non_deductible_debt_balance),
     "non_deductible_interest_rate": float(st.session_state.non_deductible_interest_rate),
+    "non_deductible_annual_repayment": float(st.session_state.non_deductible_annual_repayment),
     "non_deductible_offset_balance": float(st.session_state.non_deductible_offset_balance),
     "deductible_offset_balance": float(st.session_state.deductible_offset_balance),
+    "investment_deductible_debt_balance": float(st.session_state.investment_deductible_debt_balance),
+    "investment_deductible_interest_rate": float(st.session_state.investment_deductible_interest_rate),
+    "investment_deductible_annual_repayment": float(st.session_state.investment_deductible_annual_repayment),
+    "investment_deductible_offset_balance": float(st.session_state.investment_deductible_offset_balance),
     "surplus_allocation_order": list(st.session_state.surplus_allocation_order),
     "surplus_allocation_profile": st.session_state.surplus_allocation_profile,
     "non_super_estate_reserve": float(st.session_state.non_super_estate_reserve),
@@ -3281,6 +3771,7 @@ base_inputs = {
     "residential_property_enabled": bool(st.session_state.residential_property_enabled),
     "residential_property_value": float(st.session_state.residential_property_value),
     "residential_property_loan_balance": float(st.session_state.residential_property_loan_balance),
+    "residential_property_annual_loan_repayment": float(st.session_state.residential_property_annual_loan_repayment),
     "residential_property_sale_cost_rate": float(st.session_state.residential_property_sale_cost_rate),
     "residential_property_gross_rent": float(st.session_state.residential_property_gross_rent),
     "residential_property_operating_expenses": float(st.session_state.residential_property_operating_expenses),
@@ -3294,9 +3785,13 @@ base_inputs = {
     "residential_property_is_exempt_housing": bool(st.session_state.residential_property_is_exempt_housing),
     "residential_property_ownership_person1": 1.0 if is_one_person_mode else float(st.session_state.residential_property_ownership_person1_pct) / 100.0,
     "discretionary_trust_enabled": bool(st.session_state.discretionary_trust_enabled),
-    "discretionary_trust_net_income": float(st.session_state.discretionary_trust_net_income),
-    "discretionary_trust_excluded_income": float(st.session_state.discretionary_trust_excluded_income),
-    "discretionary_trust_income_growth_rate": float(st.session_state.discretionary_trust_income_growth_rate),
+    "discretionary_trust_balance": float(st.session_state.discretionary_trust_balance),
+    "discretionary_trust_cost_base": float(st.session_state.discretionary_trust_cost_base),
+    "discretionary_trust_income_return_mean": float(st.session_state.discretionary_trust_income_return_mean),
+    "discretionary_trust_income_return_std": float(st.session_state.discretionary_trust_income_return_std),
+    "discretionary_trust_capital_return_mean": float(st.session_state.discretionary_trust_capital_return_mean),
+    "discretionary_trust_capital_return_std": float(st.session_state.discretionary_trust_capital_return_std),
+    "discretionary_trust_excluded_income_pct": float(st.session_state.discretionary_trust_excluded_income_pct),
     "discretionary_trust_subject_to_minimum_tax": bool(st.session_state.discretionary_trust_subject_to_minimum_tax),
     "discretionary_trust_ownership_person1": 1.0 if is_one_person_mode else float(st.session_state.discretionary_trust_ownership_person1_pct) / 100.0,
     "person1_annual_income": float(st.session_state.person1_annual_income),
@@ -3322,6 +3817,7 @@ base_inputs = {
     "person2_accum_super_cost_base": 0.0 if is_one_person_mode else float(st.session_state.person2_accum_super_cost_base),
     "person2_pension_super_cost_base": 0.0 if is_one_person_mode else float(st.session_state.person2_pension_super_cost_base),
 }
+base_inputs = apply_module_scope(base_inputs)
 
 if show_live_input_checks:
     render_live_input_feedback(base_inputs)
@@ -3362,6 +3858,11 @@ if run_button:
             strategy_name: apply_debt_strategy_profile(debt_base, strategy_name)
             for strategy_name in DEBT_STRATEGY_PROFILES
         }
+
+    scenario_inputs_map = {
+        scenario_name: apply_module_scope(scenario_inputs)
+        for scenario_name, scenario_inputs in scenario_inputs_map.items()
+    }
 
     all_validation_errors = []
     for scenario_name, scenario_inputs in scenario_inputs_map.items():
@@ -3501,7 +4002,6 @@ if active_result_bundle is not None and workspace_mode == "View Results":
         adviser_sections = [
             t("Overview", "总览"),
             t("Strategy Comparison", "策略对比"),
-            t("Debt Strategies", "债务策略"),
             t("Wealth Charts", "财富图表"),
             t("Monte Carlo", "蒙特卡洛"),
             t("Tax", "税务"),
@@ -3509,6 +4009,13 @@ if active_result_bundle is not None and workspace_mode == "View Results":
             t("Debug Tables", "调试表"),
             t("Export", "导出"),
         ]
+        selected_module_inputs = selected_result["inputs"]
+        if (
+            selected_module_inputs.get("module_investment_debt_enabled", False)
+            or float(selected_module_inputs.get("main_residence_loan_balance", 0.0)) > 0
+            or float(selected_module_inputs.get("residential_property_loan_balance", 0.0)) > 0
+        ):
+            adviser_sections.insert(2, t("Debt Strategies", "债务策略"))
         adviser_result_section = st.radio(
             t("Adviser Display Section", "顾问显示区"),
             options=adviser_sections,
@@ -3617,13 +4124,15 @@ if active_result_bundle is not None and workspace_mode == "View Results":
                     "cumulative_tax",
                     "ending_non_deductible_debt",
                     "ending_deductible_debt",
+                    "ending_property_loan",
+                    "ending_home_loan",
                     "ending_offset_balance",
                     "final_wealth",
                     "final_wealth_delta",
                 ]:
                     display_debt_df[column] = display_debt_df[column].map(lambda value: f"${value:,.0f}")
                 display_debt_df["failure_probability"] = display_debt_df["failure_probability"].map(lambda value: f"{value:.1%}")
-                for column in ["non_deductible_debt_free_year", "deductible_debt_free_year"]:
+                for column in ["non_deductible_debt_free_year", "deductible_debt_free_year", "property_loan_free_year", "home_loan_free_year"]:
                     display_debt_df[column] = display_debt_df[column].map(lambda value: "-" if pd.isna(value) else f"FY{int(value)}")
                 display_debt_df = display_debt_df.rename(columns={
                     "scenario": t("Scenario", "情景"),
@@ -3632,11 +4141,15 @@ if active_result_bundle is not None and workspace_mode == "View Results":
                     "cumulative_interest": t("Cumulative Interest", "累计利息"),
                     "interest_saved_vs_base": t("Interest Saved vs Base", "较 Base 节省利息"),
                     "cumulative_tax": t("Cumulative Tax", "累计税款"),
-                    "ending_non_deductible_debt": t("Ending Non-deductible Debt", "期末不可抵扣债务"),
-                    "ending_deductible_debt": t("Ending Deductible Debt", "期末可抵扣债务"),
+                    "ending_non_deductible_debt": t("Ending Other Non-deductible Investment Debt", "期末其他不可抵扣投资债务"),
+                    "ending_deductible_debt": t("Ending Other Deductible Investment Debt", "期末其他可抵扣投资债务"),
+                    "ending_property_loan": t("Ending Investment Property Loan", "期末投资物业贷款"),
+                    "ending_home_loan": t("Ending Home Loan", "期末自住房贷款"),
                     "ending_offset_balance": t("Ending Offset", "期末 Offset"),
-                    "non_deductible_debt_free_year": t("Non-deductible Debt-free", "不可抵扣债务清偿年"),
-                    "deductible_debt_free_year": t("Deductible Debt-free", "可抵扣债务清偿年"),
+                    "non_deductible_debt_free_year": t("Other Non-deductible Debt-free", "其他不可抵扣投资债务清偿年"),
+                    "deductible_debt_free_year": t("Other Deductible Debt-free", "其他可抵扣投资债务清偿年"),
+                    "property_loan_free_year": t("Property Loan Debt-free", "投资物业贷款清偿年"),
+                    "home_loan_free_year": t("Home Loan Debt-free", "自住房贷款清偿年"),
                     "final_wealth": t("Final Wealth", "最终财富"),
                     "final_wealth_delta": t("Final Wealth vs Base", "最终财富较 Base 差异"),
                     "failure_probability": t("Failure Probability", "失败概率"),
@@ -3658,7 +4171,7 @@ if active_result_bundle is not None and workspace_mode == "View Results":
                     debt_fig = px.bar(
                         debt_df,
                         x="scenario",
-                        y=["ending_non_deductible_debt", "ending_deductible_debt"],
+                        y=["ending_home_loan", "ending_property_loan", "ending_non_deductible_debt", "ending_deductible_debt"],
                         barmode="stack",
                         title=t("Ending Debt by Type", "按类别划分的期末债务"),
                         labels={"value": t("Debt", "债务"), "variable": t("Debt Type", "债务类别")},
@@ -3670,8 +4183,12 @@ if active_result_bundle is not None and workspace_mode == "View Results":
                     "financial_year_end",
                     "non_deductible_debt_balance",
                     "residential_property_loan_balance",
+                    "main_residence_loan_balance",
+                    "investment_deductible_debt_balance",
                     "non_deductible_offset_balance",
                     "deductible_offset_balance",
+                    "main_residence_offset_balance",
+                    "investment_deductible_offset_balance",
                 ]
                 path_frames = []
                 for scenario_name, result in comparison_results.items():
@@ -3684,8 +4201,12 @@ if active_result_bundle is not None and workspace_mode == "View Results":
                     debt_paths["net_debt"] = (
                         debt_paths.get("non_deductible_debt_balance", 0)
                         + debt_paths.get("residential_property_loan_balance", 0)
+                        + debt_paths.get("main_residence_loan_balance", 0)
+                        + debt_paths.get("investment_deductible_debt_balance", 0)
                         - debt_paths.get("non_deductible_offset_balance", 0)
                         - debt_paths.get("deductible_offset_balance", 0)
+                        - debt_paths.get("main_residence_offset_balance", 0)
+                        - debt_paths.get("investment_deductible_offset_balance", 0)
                     )
                     debt_path_fig = px.line(
                         debt_paths,
@@ -3731,12 +4252,14 @@ if active_result_bundle is not None and workspace_mode == "View Results":
             total_tax_fig.update_layout(xaxis_title=t("Financial Year", "财政年度"), yaxis_title=t("Annual Tax", "年度税款"))
             st.plotly_chart(total_tax_fig, width="stretch", key=chart_key("total_tax", selected_scenario, view_mode, "adviser_lazy"))
 
-            st.subheader(t("Residential Property & Trust Tax Detail", "住宅物业与信托税务明细"))
-            st.caption(t(
-                "Trust minimum tax rows are exposure-draft estimates, not enacted-law outcomes.",
-                "信托最低税栏位为 exposure draft 估算，并非已生效法案结果。",
-            ))
-            st.dataframe(build_residential_trust_tax_detail_df(display_det_df), width="stretch")
+            if selected_result["inputs"].get("module_property_enabled", False) or selected_result["inputs"].get("module_trust_enabled", False):
+                st.subheader(t("Residential Property & Trust Tax Detail", "住宅物业与信托税务明细"))
+                if selected_result["inputs"].get("module_trust_enabled", False):
+                    st.caption(t(
+                        "Trust minimum tax rows are exposure-draft estimates, not enacted-law outcomes.",
+                        "信托最低税栏位为 exposure draft 估算，并非已生效法案结果。",
+                    ))
+                st.dataframe(build_residential_trust_tax_detail_df(display_det_df), width="stretch")
 
             st.subheader(t("2026 Budget CGT Reconciliation", "2026 Budget CGT 对账"))
             st.caption(t(
@@ -3826,8 +4349,7 @@ if active_result_bundle is not None and workspace_mode == "View Results":
                 pension_tax_free_summary_df = build_pension_tax_free_summary_df(display_det_df, selected_result["inputs"])
                 debug_df = build_adviser_debug_df(display_det_df, selected_result["inputs"])
                 cgt_validation_df = build_cgt_validation_df(display_det_df, selected_result["inputs"])
-                residential_trust_tax_df = build_residential_trust_tax_detail_df(display_det_df)
-                excel_file = dataframe_to_excel_bytes({
+                export_tables = {
                     "input_summary": input_summary_df,
                     "assumption_details": assumption_details_df,
                     "contribution_schedule": contribution_schedule_export_df,
@@ -3840,8 +4362,10 @@ if active_result_bundle is not None and workspace_mode == "View Results":
                     "adviser_debug_table": debug_df,
                     "pension_tax_free_summary": pension_tax_free_summary_df,
                     "cgt_validation_detail": cgt_validation_df,
-                    "property_trust_tax": residential_trust_tax_df,
-                })
+                }
+                if selected_result["inputs"].get("module_property_enabled", False) or selected_result["inputs"].get("module_trust_enabled", False):
+                    export_tables["property_trust_tax"] = build_residential_trust_tax_detail_df(display_det_df)
+                excel_file = dataframe_to_excel_bytes(export_tables)
                 st.download_button(
                     label=t("Download Excel", "下载 Excel"),
                     data=excel_file,

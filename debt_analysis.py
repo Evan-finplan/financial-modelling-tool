@@ -14,34 +14,40 @@ DEBT_STRATEGY_PROFILES = {
         "surplus_allocation_order": [
             "non_deductible_repayment",
             "non_deductible_offset",
-            "deductible_offset",
-            "deductible_repayment",
+            "main_residence_offset",
+            "main_residence_repayment",
+            "investment_deductible_offset",
+            "property_loan_offset",
             "non_super",
         ],
-        "description_en": "Repay non-deductible debt first, then use offsets and deductible-debt repayment.",
-        "description_zh": "优先偿还不可抵扣债务，然后使用 offset 及偿还可抵扣债务。",
+        "description_en": "Prioritise other non-deductible investment debt, then home-loan and deductible-debt offsets.",
+        "description_zh": "优先偿还其他不可抵扣投资债务，其后使用自住房及可抵扣债务 Offset。",
     },
     "Offset First": {
         "surplus_allocation_order": [
+            "main_residence_offset",
             "non_deductible_offset",
-            "deductible_offset",
+            "property_loan_offset",
+            "investment_deductible_offset",
+            "main_residence_repayment",
             "non_deductible_repayment",
-            "deductible_repayment",
             "non_super",
         ],
-        "description_en": "Build liquid offset balances before making irreversible principal repayments.",
-        "description_zh": "先累积可动用的 offset 余额，再进行不可逆的本金偿还。",
+        "description_en": "Build liquid offsets across home and investment loans before direct principal repayments.",
+        "description_zh": "先累积自住房及投资贷款的流动 Offset，再直接偿还本金。",
     },
     "Deductible First": {
         "surplus_allocation_order": [
-            "deductible_repayment",
-            "deductible_offset",
+            "investment_deductible_repayment",
+            "property_loan_repayment",
+            "investment_deductible_offset",
+            "property_loan_offset",
             "non_deductible_repayment",
             "non_deductible_offset",
             "non_super",
         ],
-        "description_en": "Repay the investment-property debt before non-deductible debt.",
-        "description_zh": "先偿还投资物业债务，再偿还不可抵扣债务。",
+        "description_en": "Repay other deductible investment debt and the property loan before non-deductible investment debt.",
+        "description_zh": "先偿还其他可抵扣投资债务及投资物业贷款，再偿还不可抵扣投资债务。",
     },
     "Invest Surplus": {
         "surplus_allocation_order": ["non_super"],
@@ -69,6 +75,11 @@ def allocate_cash_surplus(
     non_deductible_offset_balance=0.0,
     deductible_debt_balance=0.0,
     deductible_offset_balance=0.0,
+    main_residence_debt_balance=0.0,
+    main_residence_offset_balance=0.0,
+    investment_deductible_debt_balance=0.0,
+    investment_deductible_offset_balance=0.0,
+    allow_non_super_investment=True,
 ):
     """Allocate an annual cash surplus while preserving debt/offset invariants."""
     remaining = max(float(surplus), 0.0)
@@ -78,6 +89,10 @@ def allocate_cash_surplus(
     non_deductible_offset = min(max(float(non_deductible_offset_balance), 0.0), non_deductible_debt)
     deductible_debt = max(float(deductible_debt_balance), 0.0)
     deductible_offset = min(max(float(deductible_offset_balance), 0.0), deductible_debt)
+    main_residence_debt = max(float(main_residence_debt_balance), 0.0)
+    main_residence_offset = min(max(float(main_residence_offset_balance), 0.0), main_residence_debt)
+    investment_deductible_debt = max(float(investment_deductible_debt_balance), 0.0)
+    investment_deductible_offset = min(max(float(investment_deductible_offset_balance), 0.0), investment_deductible_debt)
     allocations = {
         "cash_reserve_top_up": 0.0,
         "non_deductible_offset_contribution": 0.0,
@@ -85,6 +100,10 @@ def allocate_cash_surplus(
         "deductible_offset_contribution": 0.0,
         "deductible_principal_repayment": 0.0,
         "surplus_cash_to_non_super": 0.0,
+        "main_residence_offset_contribution": 0.0,
+        "main_residence_principal_repayment": 0.0,
+        "investment_deductible_offset_contribution": 0.0,
+        "investment_deductible_principal_repayment": 0.0,
     }
 
     for destination in allocation_order or ["non_super"]:
@@ -92,6 +111,10 @@ def allocate_cash_surplus(
             break
         if destination == "cash_reserve":
             amount = min(remaining, max(cash_target - cash, 0.0))
+            cash += amount
+            allocations["cash_reserve_top_up"] += amount
+        elif destination == "cash":
+            amount = remaining
             cash += amount
             allocations["cash_reserve_top_up"] += amount
         elif destination == "non_deductible_offset":
@@ -102,15 +125,31 @@ def allocate_cash_surplus(
             amount = min(remaining, max(non_deductible_debt - non_deductible_offset, 0.0))
             non_deductible_debt -= amount
             allocations["non_deductible_principal_repayment"] += amount
-        elif destination == "deductible_offset":
+        elif destination in {"deductible_offset", "property_loan_offset"}:
             amount = min(remaining, max(deductible_debt - deductible_offset, 0.0))
             deductible_offset += amount
             allocations["deductible_offset_contribution"] += amount
-        elif destination == "deductible_repayment":
+        elif destination in {"deductible_repayment", "property_loan_repayment"}:
             amount = min(remaining, max(deductible_debt - deductible_offset, 0.0))
             deductible_debt -= amount
             allocations["deductible_principal_repayment"] += amount
-        elif destination == "non_super":
+        elif destination == "main_residence_offset":
+            amount = min(remaining, max(main_residence_debt - main_residence_offset, 0.0))
+            main_residence_offset += amount
+            allocations["main_residence_offset_contribution"] += amount
+        elif destination == "main_residence_repayment":
+            amount = min(remaining, max(main_residence_debt - main_residence_offset, 0.0))
+            main_residence_debt -= amount
+            allocations["main_residence_principal_repayment"] += amount
+        elif destination == "investment_deductible_offset":
+            amount = min(remaining, max(investment_deductible_debt - investment_deductible_offset, 0.0))
+            investment_deductible_offset += amount
+            allocations["investment_deductible_offset_contribution"] += amount
+        elif destination == "investment_deductible_repayment":
+            amount = min(remaining, max(investment_deductible_debt - investment_deductible_offset, 0.0))
+            investment_deductible_debt -= amount
+            allocations["investment_deductible_principal_repayment"] += amount
+        elif destination == "non_super" and allow_non_super_investment:
             amount = remaining
             allocations["surplus_cash_to_non_super"] += amount
         else:
@@ -119,7 +158,11 @@ def allocate_cash_surplus(
 
     # No surplus is silently lost when a profile omits a residual destination.
     if remaining > 1e-9:
-        allocations["surplus_cash_to_non_super"] += remaining
+        if allow_non_super_investment:
+            allocations["surplus_cash_to_non_super"] += remaining
+        else:
+            cash += remaining
+            allocations["cash_reserve_top_up"] += remaining
         remaining = 0.0
 
     return {
@@ -129,6 +172,10 @@ def allocate_cash_surplus(
         "ending_non_deductible_offset_balance": non_deductible_offset,
         "ending_deductible_debt_balance": deductible_debt,
         "ending_deductible_offset_balance": deductible_offset,
+        "ending_main_residence_debt_balance": main_residence_debt,
+        "ending_main_residence_offset_balance": main_residence_offset,
+        "ending_investment_deductible_debt_balance": investment_deductible_debt,
+        "ending_investment_deductible_offset_balance": investment_deductible_offset,
         "unallocated_surplus": remaining,
     }
 
@@ -157,8 +204,15 @@ def build_debt_strategy_comparison_df(comparison_results, is_chinese=False):
         final_row = det_df.iloc[-1] if not det_df.empty else {}
         cumulative_interest = float(det_df.get("total_debt_interest", pd.Series(dtype=float)).sum())
         ending_non_deductible = float(final_row.get("non_deductible_debt_balance", 0.0))
-        ending_deductible = float(final_row.get("residential_property_loan_balance", 0.0))
-        ending_offsets = float(final_row.get("non_deductible_offset_balance", 0.0)) + float(final_row.get("deductible_offset_balance", 0.0))
+        ending_deductible = float(final_row.get("investment_deductible_debt_balance", 0.0))
+        ending_property_loan = float(final_row.get("residential_property_loan_balance", 0.0))
+        ending_home_loan = float(final_row.get("main_residence_loan_balance", 0.0))
+        ending_offsets = (
+            float(final_row.get("main_residence_offset_balance", 0.0))
+            + float(final_row.get("non_deductible_offset_balance", 0.0))
+            + float(final_row.get("investment_deductible_offset_balance", 0.0))
+            + float(final_row.get("deductible_offset_balance", 0.0))
+        )
         final_wealth = float(final_row.get("total_wealth", 0.0))
         profile = DEBT_STRATEGY_PROFILES.get(name, {})
         rows.append({
@@ -170,9 +224,13 @@ def build_debt_strategy_comparison_df(comparison_results, is_chinese=False):
             "cumulative_tax": float(det_df.get("total_tax_paid", pd.Series(dtype=float)).sum()),
             "ending_non_deductible_debt": ending_non_deductible,
             "ending_deductible_debt": ending_deductible,
+            "ending_property_loan": ending_property_loan,
+            "ending_home_loan": ending_home_loan,
             "ending_offset_balance": ending_offsets,
             "non_deductible_debt_free_year": _first_debt_free_year(det_df, "non_deductible_debt_balance", "non_deductible_offset_balance"),
-            "deductible_debt_free_year": _first_debt_free_year(det_df, "residential_property_loan_balance", "deductible_offset_balance"),
+            "deductible_debt_free_year": _first_debt_free_year(det_df, "investment_deductible_debt_balance", "investment_deductible_offset_balance"),
+            "property_loan_free_year": _first_debt_free_year(det_df, "residential_property_loan_balance", "deductible_offset_balance"),
+            "home_loan_free_year": _first_debt_free_year(det_df, "main_residence_loan_balance", "main_residence_offset_balance"),
             "final_wealth": final_wealth,
             "final_wealth_delta": final_wealth - base_final,
             "failure_probability": 1.0 - float(result.get("success_rate", 0.0)),

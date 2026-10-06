@@ -46,15 +46,15 @@ Phase 2 is intentionally limited to the two items requested for this release.
 
 ### Residential investment and negative gearing
 
-The model now includes one aggregate residential investment property with opening market value, an interest-only loan, gross rent, deductible operating expenses, ownership, and growth assumptions. It applies the legislated loss-quarantine rule from the 2027–28 income year where the property is an affected established dwelling acquired after 7:30pm AEST on 12 May 2026. A current-year restricted loss is carried forward and may offset future modelled residential property income.
+The model now includes one aggregate residential investment property with opening market value, a principal-and-interest loan using an entered annual repayment amount, gross rent, deductible operating expenses, ownership, and growth assumptions. It applies the legislated loss-quarantine rule from the 2027–28 income year where the property is an affected established dwelling acquired after 7:30pm AEST on 12 May 2026. A current-year restricted loss is carried forward and may offset future modelled residential property income.
 
 The interface includes scenario flags for a property acquired before Budget time, a qualifying new build, and qualifying exempt housing. These flags require adviser confirmation against the legislation and current guidance. The August 2026 amendments preserving treatment in specified death and relationship-breakdown transfers are recognised in the policy notes, but the model does not independently identify those legal events; the adviser must select the resulting applicable status.
 
-This is an aggregate annual projection. Property equity is included in net wealth and can be selected as a strategic funding source. The debt strategy module can allocate annual surplus to extra principal repayments or an offset, but it does not model contractual amortisation schedules. The model does not include depreciation schedules, borrowing-cost amortisation, refinancing, exact transaction costs, or residential CGT.
+This is an aggregate annual projection. Property equity is included in net wealth and can be selected as a strategic funding source. Scheduled annual principal-and-interest payments use the entered annual repayment amount; annual surplus can also be allocated to extra principal repayments or the linked offset. The model does not include monthly repayment timing, lender-specific repayment rules, depreciation schedules, borrowing-cost amortisation, refinancing, exact transaction costs, or residential CGT.
 
 ### Discretionary trust 30% minimum tax
 
-The model includes a policy-scenario estimate from the 2028–29 income year. It calculates 30% trustee minimum tax on entered in-scope trust net income, allocates non-refundable credits to the modelled individual beneficiaries, and caps each credit at tax attributable to that beneficiary's trust income. Entered excluded income is removed from the minimum-tax base.
+The model includes a separate discretionary-trust investment pool with an opening balance, cost base and income/capital return assumptions. Annual trust income is derived from the modelled balance rather than entered as a gross or net income amount. From the 2028–29 income year, the policy scenario calculates 30% trustee minimum tax on in-scope trust income, removes the entered excluded-income percentage, allocates non-refundable credits to the modelled individual beneficiaries, and caps each credit at tax attributable to that beneficiary's trust income.
 
 As at 28 September 2026, this measure is based on the Treasury Laws Amendment (Tax Reform No. 4) Bill 2026 exposure draft released on 3 September 2026. It is not enacted law. The calculation is therefore labelled **Exposure draft - not enacted** in annual output and may need to change when a Bill is introduced, amended, passed, or supported by final ATO guidance.
 
@@ -65,7 +65,7 @@ The model does not independently test trust legal form or eligibility for every 
 The following matters remain outside the calculation engine and should not be inferred from any output:
 
 - full asset-by-asset CGT parcel records, exact statutory transition apportionment, published quarterly CPI index numbers, and tax-lot disposal ordering beyond the pooled Phase 3 estimate described below;
-- property CGT, depreciation schedules, contractual loan amortisation, refinancing, exact purchase and sale costs, multiple properties, and entity-by-entity residential loss pools;
+- property CGT, depreciation schedules, monthly or lender-specific loan amortisation, refinancing, exact purchase and sale costs, multiple properties, and entity-by-entity residential loss pools;
 - complete Division 293 statutory income inputs, including reportable fringe benefits, net investment loss adjustments, defined benefit contributions, and ATO assessment reconciliation;
 - concessional contribution carry-forward eligibility and non-concessional bring-forward rules;
 - personal transfer balance account history and proportional indexation of an individual's transfer balance cap;
@@ -130,8 +130,8 @@ PDF reports are available as Client Summary, Advice Support Report and Technical
 
 ## Debt strategy comparison
 
-The model separately tracks private-purpose non-deductible debt and the deductible investment-property loan. It calculates interest on each net of the linked offset balance. Non-deductible interest is treated as a household cash outflow; investment-property interest continues through the residential property tax calculation.
+The Property page is always available and separately tracks the main residence and its principal-and-interest home loan. When enabled, the residential-investment-property module tracks its own principal-and-interest deductible property loan. The separate Investment Debt module covers other deductible and non-deductible investment debts and explicitly excludes both property-page loans. Interest is calculated net of each linked offset balance. Non-deductible interest is treated as a household cash outflow; deductible interest is included in the applicable tax calculation.
 
-Annual cash surplus can be directed in a selected order to the cash reserve, non-deductible offset, non-deductible principal, deductible offset, deductible principal or the pooled non-super investment account. Debt comparison mode evaluates the current selection against non-deductible-first, offset-first, deductible-first and invest-surplus strategies, including cumulative interest, tax, ending debt, offset liquidity, debt-free timing, final wealth and failure probability.
+The separate Cash Surplus Strategy module directs annual surplus in a selected order to the cash reserve, home-loan offset or principal, property-loan offset or principal, other investment-debt offsets or principal, or the pooled non-super investment account. Debt comparison mode evaluates the current selection against non-deductible-first, offset-first, deductible-first and invest-surplus strategies, including cumulative interest, tax, ending debt by category, offset liquidity, debt-free timing, final wealth and failure probability.
 
 Deductibility depends on the use of borrowed funds rather than the security. The comparison does not determine legal deductibility or model daily interest, minimum contractual repayments, loan fees, fixed-rate break costs, refinance costs, redraw contamination, lender serviceability or whether extra repayments remain redrawable. Actual loan statements and tax records must be reviewed before advice is implemented.

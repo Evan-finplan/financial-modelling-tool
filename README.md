@@ -20,10 +20,14 @@ A Streamlit-based financial modelling tool for analysing retirement, superannuat
 - CGT modelling (super and non-super assets)
 - Adviser View / Client View
 - Excel export (inputs, assumptions, debug tables)
+- Client Module controls to hide non-applicable people, Super/Pension, non-super investments, residential property, discretionary trust, cash-surplus strategy and investment-debt sections while retaining saved inputs and excluding inactive modules from calculations and reports
 - One-click PDF report export with selectable charts, future outlook, milestone commentary, and chart explanations
 - Strategy comparison for Base Case and Strategy A/B/C, including after-tax cashflow, retirement wealth, final wealth, failure probability, cumulative tax, advantage timing, break-even year and key risks
 - Configurable asset drawdown order across cash, non-super investments, pension, accumulation super and residential property equity, with estate reserve floors
-- Debt strategy modelling for non-deductible debt and deductible investment-property debt, including separate offsets, annual interest, surplus allocation, extra principal repayments, debt-free timing and side-by-side comparison
+- A permanent Property page for the main residence and its principal-and-interest home loan, plus an optional residential-investment-property pool with its own principal-and-interest loan
+- A separate Investment Debt module for other deductible and non-deductible investment debts, explicitly excluding the main-residence and residential-investment-property loans
+- A separate Cash Surplus Strategy module for directing surplus to cash reserves, offsets, debt repayment or non-super investment, with side-by-side strategy comparison
+- A separate discretionary-trust investment pool with balance, cost base, income/capital return assumptions and excluded income entered as a percentage of modelled trust income
 - Three PDF detail levels: Client Summary, Advice Support Report and Technical Appendix
 - Editable assumption presets
 - Bilingual interface (English / 中文)
@@ -41,7 +45,7 @@ A Streamlit-based financial modelling tool for analysing retirement, superannuat
 - Division 293 tax estimate for high-income clients
 - 2026-27 SG maximum earnings base and indexed super caps
 - Residential investment property cashflow and legislated negative-gearing loss quarantine
-- Deductible and non-deductible debt, linked offset balances, cash-surplus allocation and repayment-strategy comparison
+- Principal-and-interest home and residential-investment-property loans, plus other deductible and non-deductible investment debts, linked offsets, cash-surplus allocation and repayment-strategy comparison
 - Discretionary trust 30% minimum-tax policy scenario (exposure draft; not enacted)
 - Retirement income sustainability
 

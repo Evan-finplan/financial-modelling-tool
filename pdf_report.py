@@ -27,6 +27,7 @@ from reportlab.platypus import (
 )
 
 from debt_analysis import build_debt_strategy_comparison_df
+from module_config import active_module_names
 from strategy_analysis import build_assumption_change_df, build_strategy_comparison_df
 
 
@@ -687,6 +688,12 @@ def build_pdf_report_bytes(
     ]))
     story.append(metric_table)
     story.append(Spacer(1, 4 * mm))
+    active_scope = active_module_names(inputs, is_chinese=is_chinese)
+    story.append(Paragraph(
+        f"<b>{escape(_text(is_chinese, 'Included client modules', '已纳入客户模块'))}:</b> {escape(', '.join(active_scope))}",
+        styles["small"],
+    ))
+    story.append(Spacer(1, 3 * mm))
 
     strategy_df = build_strategy_comparison_df(comparison_results, is_chinese=is_chinese)
     if not strategy_df.empty and len(strategy_df) > 1:
@@ -735,27 +742,31 @@ def build_pdf_report_bytes(
     if not debt_strategy_df.empty and (
         len(debt_strategy_df) > 1
         or float(selected_result["inputs"].get("non_deductible_debt_balance", 0.0)) > 0
+        or float(selected_result["inputs"].get("investment_deductible_debt_balance", 0.0)) > 0
         or float(selected_result["inputs"].get("residential_property_loan_balance", 0.0)) > 0
+        or float(selected_result["inputs"].get("main_residence_loan_balance", 0.0)) > 0
     ):
         story.append(Paragraph(_text(is_chinese, "Debt strategy outcomes", "债务策略结果"), styles["h1"]))
         debt_rows = [[
             Paragraph(_text(is_chinese, "Scenario", "情景"), styles["table_header"]),
             Paragraph(_text(is_chinese, "Interest", "累计利息"), styles["table_header"]),
-            Paragraph(_text(is_chinese, "Non-deductible debt", "不可抵扣债务"), styles["table_header"]),
-            Paragraph(_text(is_chinese, "Deductible debt", "可抵扣债务"), styles["table_header"]),
-            Paragraph(_text(is_chinese, "Offsets", "Offset"), styles["table_header"]),
+            Paragraph(_text(is_chinese, "Home loan", "自住房贷款"), styles["table_header"]),
+            Paragraph(_text(is_chinese, "Property loan", "投资物业贷款"), styles["table_header"]),
+            Paragraph(_text(is_chinese, "Other non-deductible", "其他不可抵扣"), styles["table_header"]),
+            Paragraph(_text(is_chinese, "Other deductible", "其他可抵扣"), styles["table_header"]),
             Paragraph(_text(is_chinese, "Final wealth", "最终财富"), styles["table_header"]),
         ]]
         for _, row in debt_strategy_df.iterrows():
             debt_rows.append([
                 Paragraph(escape(str(row["scenario"])), styles["small"]),
                 Paragraph(_money(row["cumulative_interest"]), styles["small"]),
+                Paragraph(_money(row["ending_home_loan"]), styles["small"]),
+                Paragraph(_money(row["ending_property_loan"]), styles["small"]),
                 Paragraph(_money(row["ending_non_deductible_debt"]), styles["small"]),
                 Paragraph(_money(row["ending_deductible_debt"]), styles["small"]),
-                Paragraph(_money(row["ending_offset_balance"]), styles["small"]),
                 Paragraph(_money(row["final_wealth"]), styles["small"]),
             ])
-        debt_table = Table(debt_rows, colWidths=[30 * mm, 27 * mm, 31 * mm, 31 * mm, 25 * mm, 28 * mm], repeatRows=1)
+        debt_table = Table(debt_rows, colWidths=[25 * mm, 23 * mm, 24 * mm, 25 * mm, 25 * mm, 25 * mm, 25 * mm], repeatRows=1)
         debt_table.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, 0), JBW_NAVY),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
@@ -768,8 +779,8 @@ def build_pdf_report_bytes(
         story.append(debt_table)
         story.append(Paragraph(_text(
             is_chinese,
-            "Deductible debt is limited to the modelled investment-property loan. Interest deductibility must be confirmed from the use of borrowed funds and actual loan records.",
-            "可抵扣债务仅包括模型中的投资物业贷款。利息能否抵扣必须根据借款资金用途及实际贷款记录确认。",
+            "The home loan and residential-investment-property loan are modelled separately from other investment debt. Interest deductibility must be confirmed from the use of borrowed funds and actual loan records.",
+            "自住房贷款及住宅投资物业贷款与其他投资债务分别建模。利息能否抵扣必须根据借款资金用途及实际贷款记录确认。",
         ), styles["small"]))
 
     story.append(CondPageBreak(75 * mm))
@@ -884,13 +895,21 @@ def build_pdf_report_bytes(
         story.append(Paragraph(_text(is_chinese, "Policy status", "政策状态"), styles["h1"]))
         policy_rows = [
             (_text(is_chinese, "Personal tax and super settings", "个人税及 Super 设置"), _text(is_chinese, "Current configured policy", "当前已配置政策")),
-            (_text(is_chinese, "2026 Budget CGT core reform", "2026 Budget CGT 核心改革"), _text(is_chinese, "Enacted", "已立法")),
-            (_text(is_chinese, "CGT transition allocation", "CGT 过渡分配"), _text(is_chinese, "Annual pooled estimate", "年度汇总估算")),
-            (_text(is_chinese, "Residential negative-gearing restriction", "住宅负扣税限制"), _text(is_chinese, "Enacted; aggregate estimate", "已立法；汇总估算")),
-            (_text(is_chinese, "Discretionary trust minimum tax", "Discretionary trust 最低税"), _text(is_chinese, "Exposure draft - not enacted", "征求意见稿 - 尚未立法")),
-            (_text(is_chinese, "Property sale CGT", "物业出售 CGT"), _text(is_chinese, "Not modelled", "尚未建模")),
-            (_text(is_chinese, "Debt deductibility", "债务利息抵扣资格"), _text(is_chinese, "User-confirmed loan-purpose assumption", "由用户确认借款资金用途")),
         ]
+        if inputs.get("module_non_super_enabled", True):
+            policy_rows.extend([
+                (_text(is_chinese, "2026 Budget CGT core reform", "2026 Budget CGT 核心改革"), _text(is_chinese, "Enacted", "已立法")),
+                (_text(is_chinese, "CGT transition allocation", "CGT 过渡分配"), _text(is_chinese, "Annual pooled estimate", "年度汇总估算")),
+            ])
+        if inputs.get("module_property_enabled", False):
+            policy_rows.extend([
+                (_text(is_chinese, "Residential negative-gearing restriction", "住宅负扣税限制"), _text(is_chinese, "Enacted; aggregate estimate", "已立法；汇总估算")),
+                (_text(is_chinese, "Property sale CGT", "物业出售 CGT"), _text(is_chinese, "Not modelled", "尚未建模")),
+            ])
+        if inputs.get("module_trust_enabled", False):
+            policy_rows.append((_text(is_chinese, "Discretionary trust minimum tax", "Discretionary trust 最低税"), _text(is_chinese, "Exposure draft - not enacted", "征求意见稿 - 尚未立法")))
+        if inputs.get("module_investment_debt_enabled", False):
+            policy_rows.append((_text(is_chinese, "Debt deductibility", "债务利息抵扣资格"), _text(is_chinese, "User-confirmed loan-purpose assumption", "由用户确认借款资金用途")))
         policy_table = Table(
             [[Paragraph(f"<b>{escape(label)}</b>", styles["small"]), Paragraph(escape(status), styles["small"])] for label, status in policy_rows],
             colWidths=[86 * mm, 86 * mm],
@@ -904,12 +923,22 @@ def build_pdf_report_bytes(
 
         story.append(Paragraph(_text(is_chinese, "Calculation methodology", "计算方法"), styles["h1"]))
         methodology_items = [
-            _text(is_chinese, "Annual deterministic projection with separately modelled salary, spending, contributions, tax, super, non-super investments, cash and residential property equity.", "按年度进行确定性预测，分别建模工资、支出、缴款、税务、Super、非养老金投资、现金及住宅物业净值。"),
+            _text(is_chinese, "Annual deterministic projection models salary, spending, tax, cash and each selected client module.", "年度确定性预测会建模工资、支出、税务、现金及每个已选择的客户模块。"),
             _text(is_chinese, "Monte Carlo paths use the selected return assumptions and a fixed seed for reproducibility.", "蒙特卡洛路径采用所选回报假设，并使用固定随机种子以便复现。"),
-            _text(is_chinese, "Asset drawdown follows the selected source order and respects nominated cash, non-super and property estate floors where possible.", "资产提取遵循所选资金来源顺序，并在可能范围内保留指定的现金、非养老金及物业遗产底线。"),
-            _text(is_chinese, "Annual cash surplus follows the selected debt/offset/investment allocation order. Offsets reduce interest while remaining liquid; direct repayments reduce principal and may not remain redrawable.", "年度现金盈余按照所选债务、Offset 及投资分配顺序处理。Offset 在保持流动性的同时减少利息；直接还款会降低本金且未必可以再次提取。"),
-            _text(is_chinese, "Partial property disposals proportionally reduce value and debt after estimated selling costs. Property CGT is not included.", "部分物业出售会在计入预计出售成本后，按比例减少物业价值及贷款；物业 CGT 未纳入。"),
+            _text(is_chinese, "Asset drawdown follows the selected source order and respects nominated reserves where possible.", "资产提取遵循所选资金来源顺序，并在可能范围内保留指定储备。"),
         ]
+        if inputs.get("module_cash_surplus_enabled", True) and (
+            inputs.get("module_investment_debt_enabled", False)
+            or float(inputs.get("main_residence_loan_balance", 0.0)) > 0
+            or float(inputs.get("residential_property_loan_balance", 0.0)) > 0
+        ):
+            methodology_items.append(_text(is_chinese, "Annual cash surplus follows the selected debt, offset and investment allocation order. Offsets reduce interest while remaining liquid; direct repayments reduce principal and may not remain redrawable.", "年度现金盈余按照所选债务、Offset 及投资分配顺序处理。Offset 在保持流动性的同时减少利息；直接还款会降低本金且未必可以再次提取。"))
+        if float(inputs.get("main_residence_loan_balance", 0.0)) > 0:
+            methodology_items.append(_text(is_chinese, "The main-residence loan is reduced using the entered annual principal-and-interest repayment.", "自住房贷款按输入的年度本息还款额减少。"))
+        if inputs.get("module_property_enabled", False):
+            methodology_items.append(_text(is_chinese, "The residential-investment-property loan is reduced using the entered annual principal-and-interest repayment. Partial property disposals proportionally reduce value and debt after estimated selling costs. Property CGT is not included.", "住宅投资物业贷款按输入的年度本息还款额减少。部分物业出售会在计入预计出售成本后，按比例减少物业价值及贷款；物业 CGT 未纳入。"))
+        if inputs.get("module_investment_debt_enabled", False):
+            methodology_items.append(_text(is_chinese, "Other deductible and non-deductible investment debts are reduced using their separately entered annual principal-and-interest repayments.", "其他可抵扣及不可抵扣投资债务分别按所输入的年度本息还款额减少。"))
         for item in methodology_items:
             story.append(Paragraph(f"- {escape(item)}", styles["body"]))
 

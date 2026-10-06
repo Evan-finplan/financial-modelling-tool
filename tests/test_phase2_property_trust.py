@@ -161,6 +161,32 @@ class Phase2ProjectionIntegrationTests(unittest.TestCase):
         self.assertEqual(result["residential_property_net_equity"], 430_000)
         self.assertIn("Exposure draft", result["discretionary_trust_policy_status"])
 
+    def test_property_loan_uses_principal_and_interest_repayments(self):
+        inputs = one_person_projection_inputs()
+        inputs["residential_property_annual_loan_repayment"] = 60_000
+        result = run_deterministic_projection(inputs).iloc[0]
+        self.assertEqual(result["residential_property_loan_interest"], 36_000)
+        self.assertEqual(result["residential_property_scheduled_principal"], 24_000)
+        self.assertLessEqual(result["residential_property_loan_balance"], 576_000)
+
+    def test_trust_asset_pool_derives_income_and_tracks_balance_and_cost_base(self):
+        inputs = one_person_projection_inputs()
+        inputs.update({
+            "discretionary_trust_balance": 1_000_000.0,
+            "discretionary_trust_cost_base": 600_000.0,
+            "discretionary_trust_income_return_mean": 0.04,
+            "discretionary_trust_income_return_std": 0.0,
+            "discretionary_trust_capital_return_mean": 0.05,
+            "discretionary_trust_capital_return_std": 0.0,
+            "discretionary_trust_excluded_income_pct": 0.25,
+        })
+        result = run_deterministic_projection(inputs).iloc[0]
+        self.assertEqual(result["discretionary_trust_net_income"], 40_000)
+        self.assertEqual(result["discretionary_trust_excluded_income"], 10_000)
+        self.assertEqual(result["discretionary_trust_trustee_minimum_tax"], 9_000)
+        self.assertEqual(result["ending_discretionary_trust_balance"], 1_050_000)
+        self.assertEqual(result["ending_discretionary_trust_cost_base"], 600_000)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 
 from debt_analysis import allocate_cash_surplus
+from module_config import apply_module_scope
 from policy import (
     CGT_CORE_POLICY_STATUS,
     CGT_MINIMUM_TAX_RATE,
@@ -125,7 +126,7 @@ def is_one_person_mode(inputs):
 
 
 def normalise_household_inputs(inputs):
-    normalized = copy.deepcopy(inputs)
+    normalized = apply_module_scope(copy.deepcopy(inputs))
 
     household_mode = str(normalized.get("household_mode", "Two People"))
     normalized["household_mode"] = household_mode
@@ -740,6 +741,49 @@ def allocate_household_extra_super_withdrawal(
     }
 
 
+def calculate_amortising_loan_year(balance, annual_interest_rate, remaining_term_years, offset_balance=0.0):
+    """Calculate one annual principal-and-interest payment with offset interest savings."""
+    opening_balance = max(float(balance), 0.0)
+    annual_rate = max(float(annual_interest_rate), 0.0)
+    years = max(int(remaining_term_years), 1)
+    offset = min(max(float(offset_balance), 0.0), opening_balance)
+    if opening_balance <= 0:
+        return {"payment": 0.0, "interest": 0.0, "principal": 0.0, "ending_balance": 0.0}
+    scheduled_payment = (
+        opening_balance / years
+        if annual_rate == 0
+        else opening_balance * annual_rate / (1 - (1 + annual_rate) ** (-years))
+    )
+    interest = max(opening_balance - offset, 0.0) * annual_rate
+    principal = min(max(scheduled_payment - interest, 0.0), opening_balance)
+    return {
+        "payment": interest + principal,
+        "interest": interest,
+        "principal": principal,
+        "ending_balance": opening_balance - principal,
+    }
+
+
+def calculate_loan_year_from_annual_repayment(balance, annual_interest_rate, annual_repayment, offset_balance=0.0):
+    """Apply a user-entered annual principal-and-interest repayment."""
+    opening_balance = max(float(balance), 0.0)
+    annual_rate = max(float(annual_interest_rate), 0.0)
+    offset = min(max(float(offset_balance), 0.0), opening_balance)
+    if opening_balance <= 0:
+        return {"payment": 0.0, "interest": 0.0, "principal": 0.0, "ending_balance": 0.0}
+    interest = max(opening_balance - offset, 0.0) * annual_rate
+    requested_payment = max(float(annual_repayment), 0.0)
+    payment = min(requested_payment, opening_balance + interest)
+    principal = min(max(payment - interest, 0.0), opening_balance)
+    ending_balance = max(opening_balance + interest - payment, 0.0)
+    return {
+        "payment": payment,
+        "interest": interest,
+        "principal": principal,
+        "ending_balance": ending_balance,
+    }
+
+
 def allocate_shortfall_by_asset_order(
     required_amount,
     withdrawal_order,
@@ -1018,14 +1062,41 @@ def validate_inputs(inputs):
             errors.append("Residential property ownership for Person 1 must be between 0 and 1.")
         if float(inputs.get("residential_property_interest_rate", 0.0)) < 0:
             errors.append("Residential property interest rate cannot be negative.")
+        if "residential_property_annual_loan_repayment" in inputs:
+            property_interest = max(
+                float(inputs.get("residential_property_loan_balance", 0.0))
+                - float(inputs.get("deductible_offset_balance", 0.0)),
+                0.0,
+            ) * float(inputs.get("residential_property_interest_rate", 0.0))
+            if float(inputs.get("residential_property_loan_balance", 0.0)) > 0 and float(inputs.get("residential_property_annual_loan_repayment", 0.0)) <= property_interest:
+                errors.append("Residential property annual loan repayment must be greater than annual interest so principal is repaid.")
+
+    for field in ["main_residence_value", "main_residence_loan_balance", "main_residence_offset_balance"]:
+        if float(inputs.get(field, 0.0)) < 0:
+            errors.append(f"{field} cannot be negative.")
+    if float(inputs.get("main_residence_offset_balance", 0.0)) > float(inputs.get("main_residence_loan_balance", 0.0)):
+        errors.append("main_residence_offset_balance cannot exceed main_residence_loan_balance.")
+    if "main_residence_annual_loan_repayment" in inputs:
+        home_interest = max(
+            float(inputs.get("main_residence_loan_balance", 0.0))
+            - float(inputs.get("main_residence_offset_balance", 0.0)),
+            0.0,
+        ) * float(inputs.get("main_residence_interest_rate", 0.0))
+        if float(inputs.get("main_residence_loan_balance", 0.0)) > 0 and float(inputs.get("main_residence_annual_loan_repayment", 0.0)) <= home_interest:
+            errors.append("Main residence annual loan repayment must be greater than annual interest so principal is repaid.")
 
     if inputs.get("discretionary_trust_enabled", False):
-        if float(inputs.get("discretionary_trust_net_income", 0.0)) < 0:
-            errors.append("Discretionary trust net income cannot be negative.")
-        if float(inputs.get("discretionary_trust_excluded_income", 0.0)) < 0:
-            errors.append("Discretionary trust excluded income cannot be negative.")
-        if float(inputs.get("discretionary_trust_excluded_income", 0.0)) > float(inputs.get("discretionary_trust_net_income", 0.0)):
-            errors.append("Discretionary trust excluded income cannot exceed net income.")
+        trust_balance = float(inputs.get("discretionary_trust_balance", 0.0))
+        trust_cost_base = float(inputs.get("discretionary_trust_cost_base", 0.0))
+        if trust_balance < 0:
+            errors.append("Discretionary trust balance cannot be negative.")
+        if trust_cost_base < 0 or trust_cost_base > trust_balance:
+            errors.append("Discretionary trust cost base must be between zero and the trust balance.")
+        if not 0 <= float(inputs.get("discretionary_trust_excluded_income_pct", 0.0)) <= 1:
+            errors.append("Discretionary trust excluded income percentage must be between 0 and 1.")
+        for field in ["discretionary_trust_income_return_std", "discretionary_trust_capital_return_std"]:
+            if float(inputs.get(field, 0.0)) < 0:
+                errors.append(f"{field} cannot be negative.")
         if not 0 <= float(inputs.get("discretionary_trust_ownership_person1", 0.5)) <= 1:
             errors.append("Discretionary trust allocation for Person 1 must be between 0 and 1.")
 
@@ -1061,7 +1132,13 @@ def validate_inputs(inputs):
         "property_estate_reserve",
         "non_deductible_debt_balance",
         "non_deductible_offset_balance",
+        "non_deductible_annual_repayment",
         "deductible_offset_balance",
+        "investment_deductible_debt_balance",
+        "investment_deductible_offset_balance",
+        "investment_deductible_annual_repayment",
+        "main_residence_annual_loan_repayment",
+        "residential_property_annual_loan_repayment",
     ]:
         if float(inputs.get(field, 0.0)) < 0:
             errors.append(f"{field} cannot be negative.")
@@ -1071,12 +1148,37 @@ def validate_inputs(inputs):
         errors.append("non_deductible_offset_balance cannot exceed non_deductible_debt_balance.")
     if float(inputs.get("deductible_offset_balance", 0.0)) > float(inputs.get("residential_property_loan_balance", 0.0)):
         errors.append("deductible_offset_balance cannot exceed residential_property_loan_balance.")
+    if float(inputs.get("investment_deductible_offset_balance", 0.0)) > float(inputs.get("investment_deductible_debt_balance", 0.0)):
+        errors.append("investment_deductible_offset_balance cannot exceed investment_deductible_debt_balance.")
+    if "non_deductible_annual_repayment" in inputs:
+        non_deductible_interest = max(
+            float(inputs.get("non_deductible_debt_balance", 0.0))
+            - float(inputs.get("non_deductible_offset_balance", 0.0)),
+            0.0,
+        ) * float(inputs.get("non_deductible_interest_rate", 0.0))
+        if float(inputs.get("non_deductible_debt_balance", 0.0)) > 0 and float(inputs.get("non_deductible_annual_repayment", 0.0)) <= non_deductible_interest:
+            errors.append("Non-deductible investment debt annual repayment must be greater than annual interest so principal is repaid.")
+    if "investment_deductible_annual_repayment" in inputs:
+        investment_interest = max(
+            float(inputs.get("investment_deductible_debt_balance", 0.0))
+            - float(inputs.get("investment_deductible_offset_balance", 0.0)),
+            0.0,
+        ) * float(inputs.get("investment_deductible_interest_rate", 0.0))
+        if float(inputs.get("investment_deductible_debt_balance", 0.0)) > 0 and float(inputs.get("investment_deductible_annual_repayment", 0.0)) <= investment_interest:
+            errors.append("Deductible investment debt annual repayment must be greater than annual interest so principal is repaid.")
     valid_surplus_destinations = {
+        "cash",
         "cash_reserve",
         "non_deductible_offset",
         "non_deductible_repayment",
         "deductible_offset",
         "deductible_repayment",
+        "main_residence_offset",
+        "main_residence_repayment",
+        "property_loan_offset",
+        "property_loan_repayment",
+        "investment_deductible_offset",
+        "investment_deductible_repayment",
         "non_super",
     }
     surplus_order = inputs.get("surplus_allocation_order", ["non_super"])
@@ -1730,8 +1832,14 @@ def solve_cashflow_before_returns(
     opening_non_deductible_offset_balance=0.0,
     opening_deductible_offset_balance=0.0,
     non_deductible_interest_expense=0.0,
+    opening_main_residence_loan_balance=0.0,
+    opening_main_residence_offset_balance=0.0,
+    opening_investment_deductible_debt_balance=0.0,
+    opening_investment_deductible_offset_balance=0.0,
+    additional_required_cash_outflow=0.0,
     cash_reserve_target=0.0,
     surplus_allocation_order=None,
+    allow_non_super_investment=True,
 ):
     opening_non_super_balance = max(float(opening_non_super_balance), 0.0)
     opening_non_super_cost_base = max(float(opening_non_super_cost_base), 0.0)
@@ -1778,6 +1886,7 @@ def solve_cashflow_before_returns(
         current_spending
         + total_cash_contributions
         + max(float(non_deductible_interest_expense), 0.0)
+        + max(float(additional_required_cash_outflow), 0.0)
     )
 
     non_super_withdrawal = 0.0
@@ -1796,6 +1905,10 @@ def solve_cashflow_before_returns(
     remaining_residential_property_value = max(float(opening_residential_property_value), 0.0)
     remaining_residential_property_loan_balance = max(float(opening_residential_property_loan_balance), 0.0)
     remaining_non_deductible_debt_balance = max(float(opening_non_deductible_debt_balance), 0.0)
+    remaining_main_residence_loan_balance = max(float(opening_main_residence_loan_balance), 0.0)
+    ending_main_residence_offset_balance = min(max(float(opening_main_residence_offset_balance), 0.0), remaining_main_residence_loan_balance)
+    remaining_investment_deductible_debt_balance = max(float(opening_investment_deductible_debt_balance), 0.0)
+    ending_investment_deductible_offset_balance = min(max(float(opening_investment_deductible_offset_balance), 0.0), remaining_investment_deductible_debt_balance)
     ending_non_deductible_offset_balance = min(
         max(float(opening_non_deductible_offset_balance), 0.0),
         remaining_non_deductible_debt_balance,
@@ -1825,12 +1938,21 @@ def solve_cashflow_before_returns(
             non_deductible_offset_balance=ending_non_deductible_offset_balance,
             deductible_debt_balance=remaining_residential_property_loan_balance,
             deductible_offset_balance=ending_deductible_offset_balance,
+            main_residence_debt_balance=remaining_main_residence_loan_balance,
+            main_residence_offset_balance=ending_main_residence_offset_balance,
+            investment_deductible_debt_balance=remaining_investment_deductible_debt_balance,
+            investment_deductible_offset_balance=ending_investment_deductible_offset_balance,
+            allow_non_super_investment=allow_non_super_investment,
         )
         surplus_cash_to_non_super = surplus_result["surplus_cash_to_non_super"]
         ending_cash_reserve_balance = surplus_result["ending_cash_reserve_balance"]
         remaining_non_deductible_debt_balance = surplus_result["ending_non_deductible_debt_balance"]
         ending_non_deductible_offset_balance = surplus_result["ending_non_deductible_offset_balance"]
         remaining_residential_property_loan_balance = surplus_result["ending_deductible_debt_balance"]
+        remaining_main_residence_loan_balance = surplus_result["ending_main_residence_debt_balance"]
+        ending_main_residence_offset_balance = surplus_result["ending_main_residence_offset_balance"]
+        remaining_investment_deductible_debt_balance = surplus_result["ending_investment_deductible_debt_balance"]
+        ending_investment_deductible_offset_balance = surplus_result["ending_investment_deductible_offset_balance"]
         ending_deductible_offset_balance = surplus_result["ending_deductible_offset_balance"]
         cash_reserve_top_up = surplus_result["cash_reserve_top_up"]
         non_deductible_offset_contribution = surplus_result["non_deductible_offset_contribution"]
@@ -2034,6 +2156,14 @@ def solve_cashflow_before_returns(
         "deductible_offset_withdrawal": deductible_offset_withdrawal,
         "deductible_principal_repayment": deductible_principal_repayment,
         "ending_deductible_offset_balance": ending_deductible_offset_balance,
+        "ending_main_residence_loan_balance": remaining_main_residence_loan_balance,
+        "ending_main_residence_offset_balance": ending_main_residence_offset_balance,
+        "ending_investment_deductible_debt_balance": remaining_investment_deductible_debt_balance,
+        "ending_investment_deductible_offset_balance": ending_investment_deductible_offset_balance,
+        "main_residence_offset_contribution": surplus_result.get("main_residence_offset_contribution", 0.0) if 'surplus_result' in locals() else 0.0,
+        "main_residence_extra_principal_repayment": surplus_result.get("main_residence_principal_repayment", 0.0) if 'surplus_result' in locals() else 0.0,
+        "investment_deductible_offset_contribution": surplus_result.get("investment_deductible_offset_contribution", 0.0) if 'surplus_result' in locals() else 0.0,
+        "investment_deductible_principal_repayment": surplus_result.get("investment_deductible_principal_repayment", 0.0) if 'surplus_result' in locals() else 0.0,
         "non_super_withdrawal": non_super_withdrawal,
         "non_super_cost_base_after_withdrawal": non_super_cost_base_after_withdrawal,
         "non_super_cost_base_before_return": non_super_cost_base_before_return,
@@ -2120,6 +2250,15 @@ def run_one_year(
     opening_non_deductible_debt_balance=None,
     opening_non_deductible_offset_balance=None,
     opening_deductible_offset_balance=None,
+    opening_main_residence_value=None,
+    opening_main_residence_loan_balance=None,
+    opening_main_residence_offset_balance=None,
+    opening_investment_deductible_debt_balance=None,
+    opening_investment_deductible_offset_balance=None,
+    opening_discretionary_trust_balance=None,
+    opening_discretionary_trust_cost_base=None,
+    trust_income_return_rate=None,
+    trust_capital_return_rate=None,
 ):
     year_index = year_context["year_index"]
     financial_year_end = year_context["financial_year_end"]
@@ -2148,8 +2287,9 @@ def run_one_year(
     else:
         person1_gross_income = 0.0
 
+    super_enabled = bool(inputs.get("module_super_enabled", True))
     person1_sg_result = calculate_super_guarantee_contribution(
-        gross_income=person1_gross_income,
+        gross_income=person1_gross_income if super_enabled else 0.0,
         financial_year_end=financial_year_end,
     )
     person1_sg_contribution = person1_sg_result["sg_contribution"]
@@ -2160,7 +2300,7 @@ def run_one_year(
         person2_gross_income = 0.0
 
     person2_sg_result = calculate_super_guarantee_contribution(
-        gross_income=person2_gross_income,
+        gross_income=person2_gross_income if super_enabled else 0.0,
         financial_year_end=financial_year_end,
     )
     person2_sg_contribution = person2_sg_result["sg_contribution"]
@@ -2272,6 +2412,63 @@ def run_one_year(
         phase=person2_super_phase_for_transfer,
     )
 
+    main_residence_opening_value = max(float(
+        inputs.get("main_residence_value", 0.0)
+        if opening_main_residence_value is None else opening_main_residence_value
+    ), 0.0)
+    main_residence_growth_rate = float(inputs.get("main_residence_capital_growth_rate", 0.0))
+    ending_main_residence_value = max(main_residence_opening_value * (1 + main_residence_growth_rate), 0.0)
+    main_residence_opening_loan = max(float(
+        inputs.get("main_residence_loan_balance", 0.0)
+        if opening_main_residence_loan_balance is None else opening_main_residence_loan_balance
+    ), 0.0)
+    main_residence_opening_offset = min(max(float(
+        inputs.get("main_residence_offset_balance", 0.0)
+        if opening_main_residence_offset_balance is None else opening_main_residence_offset_balance
+    ), 0.0), main_residence_opening_loan)
+    if "main_residence_annual_loan_repayment" in inputs:
+        main_residence_loan_result = calculate_loan_year_from_annual_repayment(
+            main_residence_opening_loan,
+            inputs.get("main_residence_interest_rate", 0.0),
+            inputs.get("main_residence_annual_loan_repayment", 0.0),
+            main_residence_opening_offset,
+        )
+    else:
+        main_residence_loan_result = calculate_amortising_loan_year(
+            main_residence_opening_loan,
+            inputs.get("main_residence_interest_rate", 0.0),
+            max(int(inputs.get("main_residence_loan_term_years", 1)) - year_index, 1),
+            main_residence_opening_offset,
+        )
+
+    investment_deductible_debt_balance = max(float(
+        inputs.get("investment_deductible_debt_balance", 0.0)
+        if opening_investment_deductible_debt_balance is None else opening_investment_deductible_debt_balance
+    ), 0.0)
+    investment_deductible_offset_balance = min(max(float(
+        inputs.get("investment_deductible_offset_balance", 0.0)
+        if opening_investment_deductible_offset_balance is None else opening_investment_deductible_offset_balance
+    ), 0.0), investment_deductible_debt_balance)
+    investment_deductible_interest_only = max(
+        investment_deductible_debt_balance - investment_deductible_offset_balance, 0.0
+    ) * max(float(inputs.get("investment_deductible_interest_rate", 0.0)), 0.0)
+    investment_deductible_loan_result = (
+        calculate_loan_year_from_annual_repayment(
+            investment_deductible_debt_balance,
+            inputs.get("investment_deductible_interest_rate", 0.0),
+            inputs.get("investment_deductible_annual_repayment", 0.0),
+            investment_deductible_offset_balance,
+        )
+        if "investment_deductible_annual_repayment" in inputs
+        else {
+            "payment": investment_deductible_interest_only,
+            "interest": investment_deductible_interest_only,
+            "principal": 0.0,
+            "ending_balance": investment_deductible_debt_balance,
+        }
+    )
+    investment_deductible_interest_expense = investment_deductible_loan_result["interest"]
+
     residential_property_enabled = bool(inputs.get("residential_property_enabled", False)) and float(opening_residential_property_value) > 0
     original_property_value = max(float(inputs.get("residential_property_value", 0.0)), 0.0)
     property_scale = (
@@ -2309,9 +2506,32 @@ def run_one_year(
         ), 0.0),
         property_loan_balance,
     )
-    property_loan_interest = max(property_loan_balance - deductible_offset_balance, 0.0) * max(
-        float(inputs.get("residential_property_interest_rate", 0.0)), 0.0
-    )
+    if "residential_property_annual_loan_repayment" in inputs:
+        property_loan_result = calculate_loan_year_from_annual_repayment(
+            property_loan_balance,
+            inputs.get("residential_property_interest_rate", 0.0),
+            inputs.get("residential_property_annual_loan_repayment", 0.0),
+            deductible_offset_balance,
+        )
+    elif "residential_property_loan_term_years" in inputs:
+        property_loan_result = calculate_amortising_loan_year(
+            property_loan_balance,
+            inputs.get("residential_property_interest_rate", 0.0),
+            max(int(inputs.get("residential_property_loan_term_years", 1)) - year_index, 1),
+            deductible_offset_balance,
+        )
+    else:
+        legacy_property_interest = max(property_loan_balance - deductible_offset_balance, 0.0) * max(
+            float(inputs.get("residential_property_interest_rate", 0.0)), 0.0
+        )
+        property_loan_result = {
+            "payment": legacy_property_interest,
+            "interest": legacy_property_interest,
+            "principal": 0.0,
+            "ending_balance": property_loan_balance,
+        }
+    property_loan_interest = property_loan_result["interest"]
+    property_loan_balance_after_scheduled_repayment = property_loan_result["ending_balance"]
     non_deductible_debt_balance = max(float(
         inputs.get("non_deductible_debt_balance", 0.0)
         if opening_non_deductible_debt_balance is None
@@ -2325,10 +2545,26 @@ def run_one_year(
         ), 0.0),
         non_deductible_debt_balance,
     )
-    non_deductible_interest_expense = max(
+    non_deductible_interest_only = max(
         non_deductible_debt_balance - non_deductible_offset_balance,
         0.0,
     ) * max(float(inputs.get("non_deductible_interest_rate", 0.0)), 0.0)
+    non_deductible_loan_result = (
+        calculate_loan_year_from_annual_repayment(
+            non_deductible_debt_balance,
+            inputs.get("non_deductible_interest_rate", 0.0),
+            inputs.get("non_deductible_annual_repayment", 0.0),
+            non_deductible_offset_balance,
+        )
+        if "non_deductible_annual_repayment" in inputs
+        else {
+            "payment": non_deductible_interest_only,
+            "interest": non_deductible_interest_only,
+            "principal": 0.0,
+            "ending_balance": non_deductible_debt_balance,
+        }
+    )
+    non_deductible_interest_expense = non_deductible_loan_result["interest"]
     residential_result = calculate_residential_property_year(
         gross_rent=property_gross_rent,
         deductible_operating_expenses=property_operating_expenses,
@@ -2346,17 +2582,38 @@ def run_one_year(
     ) if residential_property_enabled else 0.0
 
     discretionary_trust_enabled = bool(inputs.get("discretionary_trust_enabled", False))
-    trust_income_growth_rate = float(inputs.get("discretionary_trust_income_growth_rate", inputs.get("inflation_rate", 0.0)))
-    trust_net_income = (
-        float(inputs.get("discretionary_trust_net_income", 0.0))
-        * ((1 + trust_income_growth_rate) ** year_index)
-        if discretionary_trust_enabled else 0.0
+    trust_uses_asset_pool = "discretionary_trust_balance" in inputs
+    trust_opening_balance = (
+        max(float(inputs.get("discretionary_trust_balance", 0.0)), 0.0)
+        if opening_discretionary_trust_balance is None
+        else max(float(opening_discretionary_trust_balance), 0.0)
+    ) if discretionary_trust_enabled else 0.0
+    trust_opening_cost_base = (
+        min(max(float(inputs.get("discretionary_trust_cost_base", 0.0)), 0.0), trust_opening_balance)
+        if opening_discretionary_trust_cost_base is None
+        else min(max(float(opening_discretionary_trust_cost_base), 0.0), trust_opening_balance)
+    ) if discretionary_trust_enabled else 0.0
+    effective_trust_income_rate = float(
+        inputs.get("discretionary_trust_income_return_mean", 0.0)
+        if trust_income_return_rate is None else trust_income_return_rate
     )
-    trust_excluded_income = (
-        float(inputs.get("discretionary_trust_excluded_income", 0.0))
-        * ((1 + trust_income_growth_rate) ** year_index)
-        if discretionary_trust_enabled else 0.0
+    effective_trust_capital_rate = float(
+        inputs.get("discretionary_trust_capital_return_mean", 0.0)
+        if trust_capital_return_rate is None else trust_capital_return_rate
     )
+    if trust_uses_asset_pool:
+        trust_net_income = max(trust_opening_balance * effective_trust_income_rate, 0.0)
+        trust_excluded_income_pct = min(max(float(inputs.get("discretionary_trust_excluded_income_pct", 0.0)), 0.0), 1.0)
+        trust_excluded_income = trust_net_income * trust_excluded_income_pct
+        trust_capital_earnings = trust_opening_balance * effective_trust_capital_rate
+    else:
+        trust_income_growth_rate = float(inputs.get("discretionary_trust_income_growth_rate", inputs.get("inflation_rate", 0.0)))
+        trust_net_income = float(inputs.get("discretionary_trust_net_income", 0.0)) * ((1 + trust_income_growth_rate) ** year_index) if discretionary_trust_enabled else 0.0
+        trust_excluded_income = float(inputs.get("discretionary_trust_excluded_income", 0.0)) * ((1 + trust_income_growth_rate) ** year_index) if discretionary_trust_enabled else 0.0
+        trust_excluded_income_pct = trust_excluded_income / trust_net_income if trust_net_income > 0 else 0.0
+        trust_capital_earnings = 0.0
+    ending_discretionary_trust_balance = max(trust_opening_balance + trust_capital_earnings, 0.0)
+    ending_discretionary_trust_cost_base = min(trust_opening_cost_base, ending_discretionary_trust_balance)
     trust_result = calculate_discretionary_trust_minimum_tax(
         trust_net_income=trust_net_income,
         excluded_income=trust_excluded_income,
@@ -2379,8 +2636,14 @@ def run_one_year(
             person2_salary_income=person2_gross_income,
             taxable_non_super_earnings_total=taxable_non_super_guess,
             ownership_person1=inputs["non_super_ownership_person1"],
-            person1_personal_deductible_contribution=person1_personal_deductible_contribution,
-            person2_personal_deductible_contribution=person2_personal_deductible_contribution,
+            person1_personal_deductible_contribution=(
+                person1_personal_deductible_contribution
+                + investment_deductible_interest_expense * float(inputs.get("non_super_ownership_person1", 1.0))
+            ),
+            person2_personal_deductible_contribution=(
+                person2_personal_deductible_contribution
+                + investment_deductible_interest_expense * (1.0 - float(inputs.get("non_super_ownership_person1", 1.0)))
+            ),
             person1_gross_concessional_contribution=person1_gross_concessional_contribution,
             person2_gross_concessional_contribution=person2_gross_concessional_contribution,
             financial_year_end=financial_year_end,
@@ -2501,15 +2764,26 @@ def run_one_year(
             withdrawal_order=inputs.get("withdrawal_order"),
             non_super_estate_reserve=inputs.get("non_super_estate_reserve", 0.0),
             opening_residential_property_value=opening_residential_property_value,
-            opening_residential_property_loan_balance=property_loan_balance,
+            opening_residential_property_loan_balance=property_loan_balance_after_scheduled_repayment,
             property_estate_reserve=inputs.get("property_estate_reserve", 0.0),
             residential_property_sale_cost_rate=inputs.get("residential_property_sale_cost_rate", 0.0),
-            opening_non_deductible_debt_balance=non_deductible_debt_balance,
+            opening_non_deductible_debt_balance=non_deductible_loan_result["ending_balance"],
             opening_non_deductible_offset_balance=non_deductible_offset_balance,
             opening_deductible_offset_balance=deductible_offset_balance,
             non_deductible_interest_expense=non_deductible_interest_expense,
+            opening_main_residence_loan_balance=main_residence_loan_result["ending_balance"],
+            opening_main_residence_offset_balance=main_residence_opening_offset,
+            opening_investment_deductible_debt_balance=investment_deductible_loan_result["ending_balance"],
+            opening_investment_deductible_offset_balance=investment_deductible_offset_balance,
+            additional_required_cash_outflow=(
+                property_loan_result["principal"]
+                + main_residence_loan_result["payment"]
+                + non_deductible_loan_result["principal"]
+                + investment_deductible_loan_result["payment"]
+            ),
             cash_reserve_target=inputs.get("cash_reserve_target", inputs.get("cash_reserve_floor", 0.0)),
             surplus_allocation_order=inputs.get("surplus_allocation_order", ["non_super"]),
+            allow_non_super_investment=bool(inputs.get("module_non_super_enabled", True)),
         )
 
         taxable_non_super_guess = max(
@@ -2528,6 +2802,10 @@ def run_one_year(
     ending_non_deductible_debt_balance = cashflow["ending_non_deductible_debt_balance"]
     ending_non_deductible_offset_balance = cashflow["ending_non_deductible_offset_balance"]
     ending_deductible_offset_balance = cashflow["ending_deductible_offset_balance"]
+    ending_main_residence_loan_balance = cashflow["ending_main_residence_loan_balance"]
+    ending_main_residence_offset_balance = cashflow["ending_main_residence_offset_balance"]
+    ending_investment_deductible_debt_balance = cashflow["ending_investment_deductible_debt_balance"]
+    ending_investment_deductible_offset_balance = cashflow["ending_investment_deductible_offset_balance"]
 
     total_super_return_rate = super_income_return_rate + super_capital_return_rate
 
@@ -2699,6 +2977,7 @@ def run_one_year(
         + total_super_withdrawal_cgt_tax
     )
     residential_property_net_equity = ending_residential_property_value - ending_residential_property_loan_balance
+    main_residence_net_equity = ending_main_residence_value - ending_main_residence_loan_balance
     total_wealth = (
         total_super_balance
         + ending_non_super_balance
@@ -2706,7 +2985,12 @@ def run_one_year(
         + ending_non_deductible_offset_balance
         + ending_deductible_offset_balance
         + residential_property_net_equity
+        + main_residence_net_equity
+        + ending_main_residence_offset_balance
+        + ending_investment_deductible_offset_balance
+        + ending_discretionary_trust_balance
         - ending_non_deductible_debt_balance
+        - ending_investment_deductible_debt_balance
     )
 
     person1_net_income = (
@@ -2777,6 +3061,8 @@ def run_one_year(
         "residential_property_gross_rent": residential_result["gross_rent"],
         "residential_property_operating_expenses": residential_result["deductible_operating_expenses"],
         "residential_property_loan_interest": residential_result["loan_interest"],
+        "residential_property_scheduled_loan_payment": property_loan_result["payment"],
+        "residential_property_scheduled_principal": property_loan_result["principal"],
         "deductible_debt_interest": residential_result["loan_interest"],
         "residential_property_total_deductions": residential_result["total_deductions"],
         "residential_property_net_cashflow": residential_result["net_cashflow"],
@@ -2797,7 +3083,27 @@ def run_one_year(
         "residential_property_net_equity": residential_property_net_equity,
         "residential_property_sale_proceeds": cashflow["residential_property_sale_proceeds"],
         "residential_property_disposal_fraction": cashflow["residential_property_disposal_fraction"],
+        "opening_main_residence_value": main_residence_opening_value,
+        "ending_main_residence_value": ending_main_residence_value,
+        "opening_main_residence_loan_balance": main_residence_opening_loan,
+        "opening_main_residence_offset_balance": main_residence_opening_offset,
+        "main_residence_loan_interest": main_residence_loan_result["interest"],
+        "main_residence_scheduled_loan_payment": main_residence_loan_result["payment"],
+        "main_residence_scheduled_principal": main_residence_loan_result["principal"],
+        "main_residence_offset_contribution": cashflow["main_residence_offset_contribution"],
+        "main_residence_extra_principal_repayment": cashflow["main_residence_extra_principal_repayment"],
+        "main_residence_loan_balance": ending_main_residence_loan_balance,
+        "main_residence_offset_balance": ending_main_residence_offset_balance,
+        "main_residence_net_equity": main_residence_net_equity,
         "discretionary_trust_enabled": discretionary_trust_enabled,
+        "opening_discretionary_trust_balance": trust_opening_balance,
+        "opening_discretionary_trust_cost_base": trust_opening_cost_base,
+        "discretionary_trust_income_return_rate": effective_trust_income_rate,
+        "discretionary_trust_capital_return_rate": effective_trust_capital_rate,
+        "discretionary_trust_capital_earnings": trust_capital_earnings,
+        "ending_discretionary_trust_balance": ending_discretionary_trust_balance,
+        "ending_discretionary_trust_cost_base": ending_discretionary_trust_cost_base,
+        "discretionary_trust_excluded_income_pct": trust_excluded_income_pct,
         "discretionary_trust_net_income": trust_result["trust_net_income"],
         "discretionary_trust_excluded_income": trust_result["excluded_income"],
         "discretionary_trust_minimum_tax_income": trust_result["minimum_tax_income"],
@@ -2861,14 +3167,30 @@ def run_one_year(
         "cash_reserve_withdrawal": cashflow["cash_reserve_withdrawal"],
         "ending_cash_reserve_balance": cashflow["ending_cash_reserve_balance"],
         "non_deductible_debt_interest": non_deductible_interest_expense,
+        "non_deductible_scheduled_loan_payment": non_deductible_loan_result["payment"],
+        "non_deductible_scheduled_principal": non_deductible_loan_result["principal"],
         "non_deductible_debt_balance": ending_non_deductible_debt_balance,
         "non_deductible_offset_balance": ending_non_deductible_offset_balance,
         "non_deductible_offset_contribution": cashflow["non_deductible_offset_contribution"],
         "non_deductible_offset_withdrawal": cashflow["non_deductible_offset_withdrawal"],
         "non_deductible_principal_repayment": cashflow["non_deductible_principal_repayment"],
+        "investment_deductible_debt_interest": investment_deductible_interest_expense,
+        "investment_deductible_scheduled_loan_payment": investment_deductible_loan_result["payment"],
+        "investment_deductible_scheduled_principal": investment_deductible_loan_result["principal"],
+        "opening_investment_deductible_debt_balance": investment_deductible_debt_balance,
+        "opening_investment_deductible_offset_balance": investment_deductible_offset_balance,
+        "investment_deductible_debt_balance": ending_investment_deductible_debt_balance,
+        "investment_deductible_offset_balance": ending_investment_deductible_offset_balance,
+        "investment_deductible_principal_repayment": cashflow["investment_deductible_principal_repayment"],
+        "investment_deductible_offset_contribution": cashflow["investment_deductible_offset_contribution"],
         "deductible_offset_contribution": cashflow["deductible_offset_contribution"],
         "deductible_offset_withdrawal": cashflow["deductible_offset_withdrawal"],
-        "total_debt_interest": residential_result["loan_interest"] + non_deductible_interest_expense,
+        "total_debt_interest": (
+            residential_result["loan_interest"]
+            + main_residence_loan_result["interest"]
+            + non_deductible_interest_expense
+            + investment_deductible_interest_expense
+        ),
         "debt_strategy": inputs.get("debt_strategy_name", "Custom"),
         "surplus_allocation_order": " > ".join(inputs.get("surplus_allocation_order", [])),
         "withdrawal_strategy": inputs.get("strategy_name", "Custom"),
@@ -3010,6 +3332,11 @@ def run_deterministic_projection(inputs):
 
     current_non_super_balance = inputs["non_super_balance"]
     current_non_super_cost_base = inputs["non_super_cost_base"]
+    current_discretionary_trust_balance = max(float(inputs.get("discretionary_trust_balance", 0.0)), 0.0)
+    current_discretionary_trust_cost_base = min(
+        max(float(inputs.get("discretionary_trust_cost_base", 0.0)), 0.0),
+        current_discretionary_trust_balance,
+    )
     configured_transition_value = float(
         inputs.get("non_super_transition_value_2027", inputs["non_super_balance"])
     )
@@ -3034,11 +3361,16 @@ def run_deterministic_projection(inputs):
         float(inputs.get("residential_property_opening_quarantined_loss", 0.0)), 0.0
     )
     current_cash_reserve_balance = max(float(inputs.get("cash_reserve_balance", 0.0)), 0.0)
+    current_main_residence_value = max(float(inputs.get("main_residence_value", 0.0)), 0.0)
+    current_main_residence_loan_balance = max(float(inputs.get("main_residence_loan_balance", 0.0)), 0.0)
+    current_main_residence_offset_balance = min(max(float(inputs.get("main_residence_offset_balance", 0.0)), 0.0), current_main_residence_loan_balance)
     current_residential_property_loan_balance = (
         max(float(inputs.get("residential_property_loan_balance", 0.0)), 0.0)
         if inputs.get("residential_property_enabled", False) else 0.0
     )
     current_non_deductible_debt_balance = max(float(inputs.get("non_deductible_debt_balance", 0.0)), 0.0)
+    current_investment_deductible_debt_balance = max(float(inputs.get("investment_deductible_debt_balance", 0.0)), 0.0)
+    current_investment_deductible_offset_balance = min(max(float(inputs.get("investment_deductible_offset_balance", 0.0)), 0.0), current_investment_deductible_debt_balance)
     current_non_deductible_offset_balance = min(
         max(float(inputs.get("non_deductible_offset_balance", 0.0)), 0.0),
         current_non_deductible_debt_balance,
@@ -3091,6 +3423,15 @@ def run_deterministic_projection(inputs):
             opening_non_deductible_debt_balance=current_non_deductible_debt_balance,
             opening_non_deductible_offset_balance=current_non_deductible_offset_balance,
             opening_deductible_offset_balance=current_deductible_offset_balance,
+            opening_main_residence_value=current_main_residence_value,
+            opening_main_residence_loan_balance=current_main_residence_loan_balance,
+            opening_main_residence_offset_balance=current_main_residence_offset_balance,
+            opening_investment_deductible_debt_balance=current_investment_deductible_debt_balance,
+            opening_investment_deductible_offset_balance=current_investment_deductible_offset_balance,
+            opening_discretionary_trust_balance=current_discretionary_trust_balance,
+            opening_discretionary_trust_cost_base=current_discretionary_trust_cost_base,
+            trust_income_return_rate=inputs.get("discretionary_trust_income_return_mean", 0.0),
+            trust_capital_return_rate=inputs.get("discretionary_trust_capital_return_mean", 0.0),
         )
 
         results.append(result)
@@ -3110,11 +3451,18 @@ def run_deterministic_projection(inputs):
         current_non_super_indexed_cost_base = result["ending_non_super_indexed_cost_base"]
         current_non_super_deferred_pre_2027_gain = result["ending_non_super_deferred_pre_2027_gain"]
         current_non_super_capital_losses = result["ending_non_super_capital_losses"]
+        current_discretionary_trust_balance = result["ending_discretionary_trust_balance"]
+        current_discretionary_trust_cost_base = result["ending_discretionary_trust_cost_base"]
         current_residential_property_value = result["ending_residential_property_value"]
         current_residential_property_loan_balance = result["residential_property_loan_balance"]
         current_residential_quarantined_loss = result["closing_residential_property_quarantined_loss"]
         current_cash_reserve_balance = result["ending_cash_reserve_balance"]
+        current_main_residence_value = result["ending_main_residence_value"]
+        current_main_residence_loan_balance = result["main_residence_loan_balance"]
+        current_main_residence_offset_balance = result["main_residence_offset_balance"]
         current_non_deductible_debt_balance = result["non_deductible_debt_balance"]
+        current_investment_deductible_debt_balance = result["investment_deductible_debt_balance"]
+        current_investment_deductible_offset_balance = result["investment_deductible_offset_balance"]
         current_non_deductible_offset_balance = result["non_deductible_offset_balance"]
         current_deductible_offset_balance = result["deductible_offset_balance"]
 
@@ -3152,6 +3500,11 @@ def run_single_simulation(inputs, rng, contribution_event_lookup, projection_con
 
     current_non_super_balance = inputs["non_super_balance"]
     current_non_super_cost_base = inputs["non_super_cost_base"]
+    current_discretionary_trust_balance = max(float(inputs.get("discretionary_trust_balance", 0.0)), 0.0)
+    current_discretionary_trust_cost_base = min(
+        max(float(inputs.get("discretionary_trust_cost_base", 0.0)), 0.0),
+        current_discretionary_trust_balance,
+    )
     configured_transition_value = float(
         inputs.get("non_super_transition_value_2027", inputs["non_super_balance"])
     )
@@ -3176,11 +3529,16 @@ def run_single_simulation(inputs, rng, contribution_event_lookup, projection_con
         float(inputs.get("residential_property_opening_quarantined_loss", 0.0)), 0.0
     )
     current_cash_reserve_balance = max(float(inputs.get("cash_reserve_balance", 0.0)), 0.0)
+    current_main_residence_value = max(float(inputs.get("main_residence_value", 0.0)), 0.0)
+    current_main_residence_loan_balance = max(float(inputs.get("main_residence_loan_balance", 0.0)), 0.0)
+    current_main_residence_offset_balance = min(max(float(inputs.get("main_residence_offset_balance", 0.0)), 0.0), current_main_residence_loan_balance)
     current_residential_property_loan_balance = (
         max(float(inputs.get("residential_property_loan_balance", 0.0)), 0.0)
         if inputs.get("residential_property_enabled", False) else 0.0
     )
     current_non_deductible_debt_balance = max(float(inputs.get("non_deductible_debt_balance", 0.0)), 0.0)
+    current_investment_deductible_debt_balance = max(float(inputs.get("investment_deductible_debt_balance", 0.0)), 0.0)
+    current_investment_deductible_offset_balance = min(max(float(inputs.get("investment_deductible_offset_balance", 0.0)), 0.0), current_investment_deductible_debt_balance)
     current_non_deductible_offset_balance = min(
         max(float(inputs.get("non_deductible_offset_balance", 0.0)), 0.0),
         current_non_deductible_debt_balance,
@@ -3247,6 +3605,21 @@ def run_single_simulation(inputs, rng, contribution_event_lookup, projection_con
             opening_non_deductible_debt_balance=current_non_deductible_debt_balance,
             opening_non_deductible_offset_balance=current_non_deductible_offset_balance,
             opening_deductible_offset_balance=current_deductible_offset_balance,
+            opening_main_residence_value=current_main_residence_value,
+            opening_main_residence_loan_balance=current_main_residence_loan_balance,
+            opening_main_residence_offset_balance=current_main_residence_offset_balance,
+            opening_investment_deductible_debt_balance=current_investment_deductible_debt_balance,
+            opening_investment_deductible_offset_balance=current_investment_deductible_offset_balance,
+            opening_discretionary_trust_balance=current_discretionary_trust_balance,
+            opening_discretionary_trust_cost_base=current_discretionary_trust_cost_base,
+            trust_income_return_rate=rng.normal(
+                loc=inputs.get("discretionary_trust_income_return_mean", 0.0),
+                scale=inputs.get("discretionary_trust_income_return_std", 0.0),
+            ),
+            trust_capital_return_rate=rng.normal(
+                loc=inputs.get("discretionary_trust_capital_return_mean", 0.0),
+                scale=inputs.get("discretionary_trust_capital_return_std", 0.0),
+            ),
         )
 
         minimal_path_rows.append(make_minimal_path_row(result, simulation_id))
@@ -3269,11 +3642,18 @@ def run_single_simulation(inputs, rng, contribution_event_lookup, projection_con
         current_non_super_indexed_cost_base = result["ending_non_super_indexed_cost_base"]
         current_non_super_deferred_pre_2027_gain = result["ending_non_super_deferred_pre_2027_gain"]
         current_non_super_capital_losses = result["ending_non_super_capital_losses"]
+        current_discretionary_trust_balance = result["ending_discretionary_trust_balance"]
+        current_discretionary_trust_cost_base = result["ending_discretionary_trust_cost_base"]
         current_residential_property_value = result["ending_residential_property_value"]
         current_residential_property_loan_balance = result["residential_property_loan_balance"]
         current_residential_quarantined_loss = result["closing_residential_property_quarantined_loss"]
         current_cash_reserve_balance = result["ending_cash_reserve_balance"]
+        current_main_residence_value = result["ending_main_residence_value"]
+        current_main_residence_loan_balance = result["main_residence_loan_balance"]
+        current_main_residence_offset_balance = result["main_residence_offset_balance"]
         current_non_deductible_debt_balance = result["non_deductible_debt_balance"]
+        current_investment_deductible_debt_balance = result["investment_deductible_debt_balance"]
+        current_investment_deductible_offset_balance = result["investment_deductible_offset_balance"]
         current_non_deductible_offset_balance = result["non_deductible_offset_balance"]
         current_deductible_offset_balance = result["deductible_offset_balance"]
 

@@ -7,10 +7,42 @@ from debt_analysis import (
     apply_debt_strategy_profile,
     build_debt_strategy_comparison_df,
 )
-from model import run_deterministic_projection
+from model import calculate_loan_year_from_annual_repayment, run_deterministic_projection
 
 
 class DebtAllocationTests(unittest.TestCase):
+    def test_entered_annual_repayment_pays_interest_then_principal(self):
+        result = calculate_loan_year_from_annual_repayment(
+            balance=500_000,
+            annual_interest_rate=0.06,
+            annual_repayment=50_000,
+            offset_balance=100_000,
+        )
+        self.assertEqual(result["interest"], 24_000)
+        self.assertEqual(result["principal"], 26_000)
+        self.assertEqual(result["ending_balance"], 474_000)
+    def test_surplus_stays_in_cash_when_non_super_module_is_disabled(self):
+        result = allocate_cash_surplus(
+            surplus=50_000,
+            allocation_order=["cash_reserve", "non_super"],
+            cash_reserve_balance=10_000,
+            cash_reserve_target=20_000,
+            allow_non_super_investment=False,
+        )
+        self.assertEqual(result["ending_cash_reserve_balance"], 60_000)
+        self.assertEqual(result["surplus_cash_to_non_super"], 0)
+
+    def test_cash_destination_retains_all_surplus_without_a_target_cap(self):
+        result = allocate_cash_surplus(
+            surplus=50_000,
+            allocation_order=["cash"],
+            cash_reserve_balance=10_000,
+            cash_reserve_target=20_000,
+            allow_non_super_investment=True,
+        )
+        self.assertEqual(result["ending_cash_reserve_balance"], 60_000)
+        self.assertEqual(result["surplus_cash_to_non_super"], 0)
+
     def test_non_deductible_offset_is_filled_before_repayment(self):
         result = allocate_cash_surplus(
             surplus=80_000,
@@ -41,8 +73,29 @@ class DebtAllocationTests(unittest.TestCase):
         base = {"annual_living_expenses": 100_000, "surplus_allocation_order": ["non_super"]}
         strategy = apply_debt_strategy_profile(base, "Offset First")
         self.assertEqual(strategy["annual_living_expenses"], 100_000)
-        self.assertEqual(strategy["surplus_allocation_order"][0], "non_deductible_offset")
+        self.assertEqual(strategy["surplus_allocation_order"][0], "main_residence_offset")
         self.assertEqual(strategy["debt_strategy_name"], "Offset First")
+
+    def test_surplus_can_be_split_across_home_property_and_investment_debt(self):
+        result = allocate_cash_surplus(
+            surplus=150_000,
+            allocation_order=[
+                "main_residence_offset",
+                "property_loan_repayment",
+                "investment_deductible_offset",
+            ],
+            main_residence_debt_balance=200_000,
+            main_residence_offset_balance=150_000,
+            deductible_debt_balance=300_000,
+            deductible_offset_balance=0,
+            investment_deductible_debt_balance=100_000,
+            investment_deductible_offset_balance=50_000,
+        )
+        self.assertEqual(result["main_residence_offset_contribution"], 50_000)
+        self.assertEqual(result["deductible_principal_repayment"], 100_000)
+        self.assertEqual(result["investment_deductible_offset_contribution"], 0)
+        self.assertEqual(result["ending_main_residence_offset_balance"], 200_000)
+        self.assertEqual(result["ending_deductible_debt_balance"], 200_000)
 
 
 class DebtComparisonTests(unittest.TestCase):
@@ -56,6 +109,10 @@ class DebtComparisonTests(unittest.TestCase):
             "non_deductible_offset_balance": [0, 0],
             "residential_property_loan_balance": [400_000, 390_000],
             "deductible_offset_balance": [0, 0],
+            "main_residence_loan_balance": [500_000, 480_000],
+            "main_residence_offset_balance": [20_000, 30_000],
+            "investment_deductible_debt_balance": [80_000, 70_000],
+            "investment_deductible_offset_balance": [5_000, 10_000],
         })
         strategy_df = base_df.copy()
         strategy_df["total_wealth"] = [905_000, 970_000]
@@ -70,6 +127,10 @@ class DebtComparisonTests(unittest.TestCase):
         self.assertEqual(row["interest_saved_vs_base"], 10_000)
         self.assertEqual(row["non_deductible_debt_free_year"], 2028)
         self.assertEqual(row["final_wealth_delta"], 20_000)
+        self.assertEqual(row["ending_home_loan"], 480_000)
+        self.assertEqual(row["ending_property_loan"], 390_000)
+        self.assertEqual(row["ending_deductible_debt"], 70_000)
+        self.assertEqual(row["ending_offset_balance"], 40_000)
 
 
 class DebtProjectionIntegrationTests(unittest.TestCase):
@@ -118,17 +179,33 @@ class DebtProjectionIntegrationTests(unittest.TestCase):
             "cash_reserve_floor": 0.0,
             "cash_reserve_target": 0.0,
             "withdrawal_order": ["cash", "non_super", "pension", "accumulation", "property"],
-            "surplus_allocation_order": ["non_deductible_repayment", "non_super"],
+            "surplus_allocation_order": ["cash"],
             "non_deductible_debt_balance": 100_000.0,
             "non_deductible_offset_balance": 20_000.0,
             "non_deductible_interest_rate": 0.10,
+            "non_deductible_annual_repayment": 20_000.0,
+            "main_residence_value": 1_000_000.0,
+            "main_residence_loan_balance": 500_000.0,
+            "main_residence_interest_rate": 0.06,
+            "main_residence_annual_loan_repayment": 50_000.0,
+            "main_residence_offset_balance": 100_000.0,
+            "investment_deductible_debt_balance": 200_000.0,
+            "investment_deductible_interest_rate": 0.06,
+            "investment_deductible_annual_repayment": 30_000.0,
+            "investment_deductible_offset_balance": 0.0,
             "residential_property_enabled": False,
         }
         result = run_deterministic_projection(inputs).iloc[0]
         self.assertEqual(result["non_deductible_debt_interest"], 8_000)
-        self.assertGreater(result["non_deductible_principal_repayment"], 0)
-        self.assertLess(result["non_deductible_debt_balance"], 100_000)
+        self.assertEqual(result["non_deductible_scheduled_principal"], 12_000)
+        self.assertEqual(result["non_deductible_debt_balance"], 88_000)
         self.assertEqual(result["non_deductible_offset_balance"], 20_000)
+        self.assertEqual(result["main_residence_loan_interest"], 24_000)
+        self.assertEqual(result["main_residence_scheduled_principal"], 26_000)
+        self.assertEqual(result["main_residence_loan_balance"], 474_000)
+        self.assertEqual(result["investment_deductible_debt_interest"], 12_000)
+        self.assertEqual(result["investment_deductible_scheduled_principal"], 18_000)
+        self.assertEqual(result["investment_deductible_debt_balance"], 182_000)
 
 
 if __name__ == "__main__":
