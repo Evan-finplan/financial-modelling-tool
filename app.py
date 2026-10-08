@@ -334,7 +334,6 @@ INPUT_EXCEL_FIELDS = [
     "household_mode",
     "module_second_person_enabled",
     "module_super_enabled",
-    "module_pension_enabled",
     "module_non_super_enabled",
     "module_property_enabled",
     "module_trust_enabled",
@@ -1986,6 +1985,11 @@ for key, value in defaults.items():
     if key not in st.session_state:
         st.session_state[key] = value
 
+# Pension phase is always available. An opening balance of zero represents a
+# client who has not commenced a pension yet; future transfers still occur at
+# the entered pension start age.
+st.session_state.module_pension_enabled = True
+
 
 def apply_preset_values(preset_name, preset_map):
     preset_values = preset_map[preset_name]
@@ -2034,7 +2038,7 @@ show_live_input_checks = bool(st.session_state.show_live_input_checks)
 is_one_person_mode = household_mode == "One Person"
 module_second_person_enabled = bool(st.session_state.module_second_person_enabled)
 module_super_enabled = bool(st.session_state.module_super_enabled)
-module_pension_enabled = bool(st.session_state.module_pension_enabled) and module_super_enabled
+module_pension_enabled = True
 module_non_super_enabled = bool(st.session_state.module_non_super_enabled)
 module_property_enabled = bool(st.session_state.module_property_enabled)
 module_trust_enabled = bool(st.session_state.module_trust_enabled)
@@ -2214,13 +2218,10 @@ with st.sidebar:
             t("Super accumulation", "Super 累积账户"),
             key="module_super_enabled",
         )
-        if not module_super_enabled:
-            st.session_state.module_pension_enabled = False
-        module_pension_enabled = st.checkbox(
-            t("Pension accounts", "Pension 账户"),
-            key="module_pension_enabled",
-            disabled=not module_super_enabled,
-        )
+        st.caption(t(
+            "Pension accounts are always active. Enter zero opening pension balance if the client has not started a pension yet; accumulation super will still transfer at the selected pension start age.",
+            "Pension 账户为常驻模块。如客户目前尚未开始领取 Pension，请将期初 Pension 余额填为零；Accumulation Super 仍会在所选 Pension 开始年龄转入 Pension。",
+        ))
         module_non_super_enabled = st.checkbox(
             t("Non-super investments", "非 Super 投资"),
             key="module_non_super_enabled",
@@ -3826,7 +3827,7 @@ base_inputs = {
     "household_mode": st.session_state.household_mode,
     "module_second_person_enabled": bool(st.session_state.module_second_person_enabled),
     "module_super_enabled": bool(st.session_state.module_super_enabled),
-    "module_pension_enabled": bool(st.session_state.module_pension_enabled),
+    "module_pension_enabled": True,
     "module_non_super_enabled": bool(st.session_state.module_non_super_enabled),
     "module_property_enabled": bool(st.session_state.module_property_enabled),
     "module_trust_enabled": bool(st.session_state.module_trust_enabled),

@@ -48,7 +48,10 @@ def module_flags_from_inputs(inputs):
             flags["module_property_enabled"]
             and float(inputs.get("residential_property_loan_balance", 0.0)) > 0
         )
-    flags["module_pension_enabled"] = flags["module_super_enabled"] and flags["module_pension_enabled"]
+    # Pension phase is a permanent part of the retirement model. A zero opening
+    # pension balance means the client has no pension account today; it must not
+    # disable a future accumulation-to-pension transfer at pension start age.
+    flags["module_pension_enabled"] = True
     if "module_investment_debt_enabled" not in inputs:
         flags["module_investment_debt_enabled"] = bool(
             flags["module_non_deductible_debt_enabled"]
@@ -70,22 +73,9 @@ def apply_module_scope(inputs):
 
     if not flags["module_super_enabled"]:
         for person in ("person1", "person2"):
-            for suffix in (
-                "accum_super_balance",
-                "pension_super_balance",
-                "accum_super_cost_base",
-                "pension_super_cost_base",
-                "transfer_balance_cap",
-            ):
+            for suffix in ("accum_super_balance", "accum_super_cost_base"):
                 scoped[f"{person}_{suffix}"] = 0.0
         scoped["contribution_events"] = []
-        scoped["module_pension_enabled"] = False
-    elif not flags["module_pension_enabled"]:
-        for person in ("person1", "person2"):
-            scoped[f"{person}_pension_super_balance"] = 0.0
-            scoped[f"{person}_pension_super_cost_base"] = 0.0
-            scoped[f"{person}_transfer_balance_cap"] = 0.0
-            scoped[f"{person}_pension_start_age"] = 999
 
     if not flags["module_non_super_enabled"]:
         for key in (
@@ -142,8 +132,7 @@ def apply_module_scope(inputs):
         allowed_withdrawals.add("non_super")
     if flags["module_super_enabled"]:
         allowed_withdrawals.add("accumulation")
-    if scoped.get("module_pension_enabled", False):
-        allowed_withdrawals.add("pension")
+    allowed_withdrawals.add("pension")
     if flags["module_property_enabled"]:
         allowed_withdrawals.add("property")
     scoped["withdrawal_order"] = [item for item in withdrawal_order if item in allowed_withdrawals]

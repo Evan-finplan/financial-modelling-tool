@@ -20,7 +20,7 @@ A Streamlit-based financial modelling tool for analysing retirement, superannuat
 - CGT modelling (super and non-super assets)
 - Adviser View / Client View
 - Excel export (inputs, assumptions, debug tables)
-- Client Module controls to hide non-applicable people, Super/Pension, non-super investments, residential property, discretionary trust, cash-surplus strategy and investment-debt sections while retaining saved inputs and excluding inactive modules from calculations and reports
+- Client Module controls to hide non-applicable people, super accumulation, non-super investments, residential property, discretionary trust, cash-surplus strategy and investment-debt sections while retaining saved inputs and excluding inactive modules from calculations and reports. Pension phase is always active: a zero opening pension balance represents a client who has not commenced pension yet, while future accumulation-to-pension transfer still occurs at the selected pension start age.
 - One-click PDF report export with selectable charts, future outlook, milestone commentary, and chart explanations
 - Strategy comparison for Base Case and Strategy A/B/C, including after-tax cashflow, retirement wealth, final wealth, failure probability, cumulative tax, advantage timing, break-even year and key risks
 - Configurable asset drawdown order across cash, non-super investments, pension, accumulation super and residential property equity, with estate reserve floors

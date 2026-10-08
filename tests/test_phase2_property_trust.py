@@ -229,6 +229,24 @@ class Phase2ProjectionIntegrationTests(unittest.TestCase):
         inputs["person1_retirement_age"] = 65
         self.assertEqual(validate_inputs(inputs), [])
 
+    def test_legacy_disabled_pension_flag_still_transfers_at_start_age(self):
+        inputs = one_person_projection_inputs()
+        inputs.update({
+            "start_financial_year": 2027,
+            "projection_years": 3,
+            "person1_current_age": 65,
+            "person1_retirement_age": 67,
+            "person1_pension_start_age": 67,
+            "module_pension_enabled": False,
+            "residential_property_enabled": False,
+            "discretionary_trust_enabled": False,
+        })
+        result = run_deterministic_projection(inputs)
+        pension_start = result.loc[result["person1_started_pension_this_year"]]
+        self.assertEqual(len(pension_start), 1)
+        self.assertEqual(int(pension_start.iloc[0]["person1_age"]), 67)
+        self.assertGreater(float(pension_start.iloc[0]["person1_transfer_to_pension"]), 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()

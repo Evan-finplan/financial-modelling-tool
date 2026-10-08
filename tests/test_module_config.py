@@ -27,13 +27,15 @@ class ModuleConfigTests(unittest.TestCase):
         self.assertNotIn("property", scoped["withdrawal_order"])
         self.assertNotIn("deductible_repayment", scoped["surplus_allocation_order"])
 
-    def test_disabled_super_and_non_super_neutralise_balances_and_orders(self):
+    def test_disabled_accumulation_preserves_permanent_pension_phase(self):
         scoped = apply_module_scope({
             "module_super_enabled": False,
-            "module_pension_enabled": True,
+            "module_pension_enabled": False,
             "module_non_super_enabled": False,
             "person1_accum_super_balance": 500_000,
             "person1_pension_super_balance": 200_000,
+            "person1_pension_super_cost_base": 150_000,
+            "person1_pension_start_age": 67,
             "person1_transfer_balance_cap": 2_000_000,
             "non_super_balance": 700_000,
             "non_super_cost_base": 400_000,
@@ -42,11 +44,14 @@ class ModuleConfigTests(unittest.TestCase):
             "surplus_allocation_order": ["non_super"],
         })
         self.assertEqual(scoped["person1_accum_super_balance"], 0)
-        self.assertEqual(scoped["person1_pension_super_balance"], 0)
+        self.assertEqual(scoped["person1_pension_super_balance"], 200_000)
+        self.assertEqual(scoped["person1_pension_super_cost_base"], 150_000)
+        self.assertEqual(scoped["person1_pension_start_age"], 67)
+        self.assertEqual(scoped["person1_transfer_balance_cap"], 2_000_000)
         self.assertEqual(scoped["contribution_events"], [])
-        self.assertFalse(scoped["module_pension_enabled"])
+        self.assertTrue(scoped["module_pension_enabled"])
         self.assertEqual(scoped["non_super_balance"], 0)
-        self.assertEqual(scoped["withdrawal_order"], ["cash"])
+        self.assertEqual(scoped["withdrawal_order"], ["cash", "pension"])
         self.assertEqual(scoped["surplus_allocation_order"], ["cash_reserve"])
 
     def test_legacy_inputs_infer_existing_optional_modules(self):
