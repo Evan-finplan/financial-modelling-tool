@@ -5,6 +5,7 @@ from model import (
     calculate_incremental_budget_tax,
     calculate_residential_property_year,
     run_deterministic_projection,
+    validate_inputs,
 )
 
 
@@ -186,6 +187,47 @@ class Phase2ProjectionIntegrationTests(unittest.TestCase):
         self.assertEqual(result["discretionary_trust_trustee_minimum_tax"], 9_000)
         self.assertEqual(result["ending_discretionary_trust_balance"], 1_050_000)
         self.assertEqual(result["ending_discretionary_trust_cost_base"], 600_000)
+
+    def test_negative_gearing_cannot_create_negative_personal_or_total_tax(self):
+        inputs = one_person_projection_inputs()
+        inputs.update({
+            "start_financial_year": 2027,
+            "person1_annual_income": 0.0,
+            "person1_accum_super_balance": 0.0,
+            "person1_accum_super_cost_base": 0.0,
+            "non_super_balance": 250_000.0,
+            "non_super_cost_base": 250_000.0,
+            "residential_property_value": 1_500_000.0,
+            "residential_property_loan_balance": 1_200_000.0,
+            "residential_property_gross_rent": 45_000.0,
+            "residential_property_operating_expenses": 18_000.0,
+            "residential_property_interest_rate": 0.065,
+            "residential_property_annual_loan_repayment": 95_000.0,
+            "residential_property_acquired_before_budget_time": True,
+            "discretionary_trust_enabled": False,
+        })
+        result = run_deterministic_projection(inputs).iloc[0]
+        self.assertEqual(result["person1_total_taxable_income"], 0.0)
+        self.assertLess(result["person1_property_tax_adjustment"], 0.0)
+        self.assertGreaterEqual(result["person1_personal_tax_total"], 0.0)
+        self.assertGreaterEqual(result["total_tax_paid"], 0.0)
+
+    def test_validation_rejects_unreasonable_age_and_super_cost_base(self):
+        inputs = one_person_projection_inputs()
+        inputs["person1_current_age"] = 130
+        inputs["person1_accum_super_cost_base"] = 2_000_000.0
+        errors = validate_inputs(inputs)
+        self.assertIn("person1_current_age must be between 18 and 100.", errors)
+        self.assertIn(
+            "person1_accum_super_cost_base cannot exceed person1_accum_super_balance under the current pooled cost-base setup.",
+            errors,
+        )
+
+    def test_validation_allows_already_retired_client(self):
+        inputs = one_person_projection_inputs()
+        inputs["person1_current_age"] = 70
+        inputs["person1_retirement_age"] = 65
+        self.assertEqual(validate_inputs(inputs), [])
 
 
 if __name__ == "__main__":

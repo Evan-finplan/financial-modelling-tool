@@ -134,6 +134,17 @@ class PdfReportTests(unittest.TestCase):
         self.assertIn("确定性预测", translated)
         self.assertNotIn("deterministic projection", translated)
 
+    def test_chinese_pdf_wraps_latin_runs_with_compact_font(self):
+        marked_up = pdf_report._pdf_text("报告包含 Client Summary、Pension、CGT 及 FY2027。", True)
+        self.assertIn('<font name="Helvetica">Client Summary</font>', marked_up)
+        self.assertIn('<font name="Helvetica">Pension</font>', marked_up)
+        self.assertIn('<font name="Helvetica">CGT ', marked_up)
+        self.assertIn('<font name="Helvetica">FY2027</font>', marked_up)
+
+    def test_report_detail_label_is_localised_on_chinese_cover(self):
+        self.assertEqual(pdf_report._report_detail_label("Client Summary", True), "客户摘要")
+        self.assertEqual(pdf_report._report_detail_label("Technical Appendix", True), "技术附录")
+
 
 if __name__ == "__main__":
     unittest.main()

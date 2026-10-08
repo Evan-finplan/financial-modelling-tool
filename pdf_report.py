@@ -130,6 +130,16 @@ def _scenario_label(value, is_chinese):
     }.get(str(value), str(value))
 
 
+def _report_detail_label(value, is_chinese):
+    if not is_chinese:
+        return str(value)
+    return {
+        "Client Summary": "客户摘要",
+        "Advice Support Report": "建议支持报告",
+        "Technical Appendix": "技术附录",
+    }.get(str(value), str(value))
+
+
 def _household_display_name(inputs, is_chinese):
     names = [str(inputs.get("person1_name", "")).strip()]
     if str(inputs.get("household_mode", "Two People")) == "Two People":
@@ -502,13 +512,53 @@ def _register_arial_compatible_font():
     return "Helvetica"
 
 
+def _register_cjk_compatible_font():
+    font_candidates = [
+        (Path("C:/Windows/Fonts/msyh.ttc"), Path("C:/Windows/Fonts/msyhbd.ttc"), 0),
+        (Path("C:/Windows/Fonts/simsun.ttc"), Path("C:/Windows/Fonts/simhei.ttf"), 0),
+        (Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"), Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc"), 0),
+        (Path("/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc"), Path("/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc"), 0),
+        (Path("/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf"), Path("/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf"), 0),
+    ]
+    for regular_path, bold_path, subfont_index in font_candidates:
+        if not regular_path.exists():
+            continue
+        try:
+            pdfmetrics.registerFont(TTFont("CJKReport", str(regular_path), subfontIndex=subfont_index))
+            if bold_path.exists():
+                pdfmetrics.registerFont(TTFont("CJKReport-Bold", str(bold_path), subfontIndex=subfont_index))
+                pdfmetrics.registerFontFamily(
+                    "CJKReport",
+                    normal="CJKReport",
+                    bold="CJKReport-Bold",
+                    italic="CJKReport",
+                    boldItalic="CJKReport-Bold",
+                )
+            return "CJKReport"
+        except Exception:
+            continue
+    try:
+        pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
+        return "STSong-Light"
+    except Exception:
+        return "Helvetica"
+
+
+def _pdf_text(value, is_chinese):
+    """Escape text and keep Latin runs compact when a CID CJK fallback is used."""
+    escaped_value = escape(str(value))
+    if not is_chinese:
+        return escaped_value
+    return re.sub(
+        r"[A-Za-z0-9][A-Za-z0-9 .,/$%()+:_\-]*",
+        lambda match: f'<font name="Helvetica">{match.group(0)}</font>',
+        escaped_value,
+    )
+
+
 def _styles(is_chinese):
     if is_chinese:
-        try:
-            pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
-            font_name = "STSong-Light"
-        except Exception:
-            font_name = "Helvetica"
+        font_name = _register_cjk_compatible_font()
         body_size = 11.0
         small_size = 9.5
     else:
@@ -596,22 +646,22 @@ def build_pdf_report_bytes(
         _text(is_chinese, "FINANCIAL MODELLING REPORT", "财务模型报告"),
         styles["cover_kicker"],
     ))
-    story.append(Paragraph(escape(report_title), title_style))
+    story.append(Paragraph(_pdf_text(report_title, is_chinese), title_style))
     story.append(Spacer(1, 7 * mm))
     story.append(Paragraph(_text(is_chinese, "Prepared for", "为以下客户编制"), styles["cover_kicker"]))
-    story.append(Paragraph(escape(prepared_for), styles["cover_name"]))
+    story.append(Paragraph(_pdf_text(prepared_for, is_chinese), styles["cover_name"]))
     story.append(Spacer(1, 10 * mm))
 
     cover_details = [
         (_text(is_chinese, "Scenario", "分析情景"), _scenario_label(selected_scenario, is_chinese)),
-        (_text(is_chinese, "Report detail", "报告详细程度"), report_detail),
+        (_text(is_chinese, "Report detail", "报告详细程度"), _report_detail_label(report_detail, is_chinese)),
         (_text(is_chinese, "Value basis", "价值口径"), _text(is_chinese, "Present Value", "现值") if value_mode == "Present Value" else _text(is_chinese, "Future Value", "终值")),
         (_text(is_chinese, "Report date", "报告日期"), generated_at.strftime("%d %B %Y") if not is_chinese else generated_at.strftime("%Y年%m月%d日")),
     ]
     cover_rows = [
         [
-            Paragraph(f"<b>{escape(label)}</b>", styles["cover_meta"]),
-            Paragraph(escape(str(value)), styles["cover_meta"]),
+            Paragraph(f"<b>{_pdf_text(label, is_chinese)}</b>", styles["cover_meta"]),
+            Paragraph(_pdf_text(value, is_chinese), styles["cover_meta"]),
         ]
         for label, value in cover_details
     ]
@@ -667,14 +717,14 @@ def build_pdf_report_bytes(
         [
             Paragraph(_text(is_chinese, "Success rate", "成功率"), styles["small"]),
             Paragraph(_text(is_chinese, "Median final wealth", "最终财富中位数"), styles["small"]),
-            Paragraph(_text(is_chinese, "P10 / P90 range", "P10 / P90 区间"), styles["small"]),
+            Paragraph(_pdf_text(_text(is_chinese, "P10 / P90 range", "P10 / P90 区间"), is_chinese), styles["small"]),
             Paragraph(_text(is_chinese, "Deterministic final wealth", "确定性最终财富"), styles["small"]),
         ],
         [
-            Paragraph(f"<b>{_percentage(success_rate)}</b>", styles["metric"]),
-            Paragraph(f"<b>{_money(median_final)}</b>", styles["metric"]),
-            Paragraph(f"<b>{_money(p10_final)} / {_money(p90_final)}</b>", styles["metric"]),
-            Paragraph(f"<b>{_money(end_wealth)}</b>", styles["metric"]),
+            Paragraph(f"<b>{_pdf_text(_percentage(success_rate), is_chinese)}</b>", styles["metric"]),
+            Paragraph(f"<b>{_pdf_text(_money(median_final), is_chinese)}</b>", styles["metric"]),
+            Paragraph(f"<b>{_pdf_text(f'{_money(p10_final)} / {_money(p90_final)}', is_chinese)}</b>", styles["metric"]),
+            Paragraph(f"<b>{_pdf_text(_money(end_wealth), is_chinese)}</b>", styles["metric"]),
         ],
     ]
     metric_table = Table(metric_data, colWidths=[43 * mm] * 4, rowHeights=[11 * mm, 13 * mm])
@@ -690,7 +740,7 @@ def build_pdf_report_bytes(
     story.append(Spacer(1, 4 * mm))
     active_scope = active_module_names(inputs, is_chinese=is_chinese)
     story.append(Paragraph(
-        f"<b>{escape(_text(is_chinese, 'Included client modules', '已纳入客户模块'))}:</b> {escape(', '.join(active_scope))}",
+        f"<b>{_pdf_text(_text(is_chinese, 'Included client modules', '已纳入客户模块'), is_chinese)}:</b> {_pdf_text(', '.join(active_scope), is_chinese)}",
         styles["small"],
     ))
     story.append(Spacer(1, 3 * mm))
@@ -708,12 +758,12 @@ def build_pdf_report_bytes(
         ]]
         for _, row in strategy_df.iterrows():
             strategy_rows.append([
-                Paragraph(escape(str(row["scenario"])), styles["small"]),
-                Paragraph(_money(row["retirement_wealth"]), styles["small"]),
-                Paragraph(_money(row["final_wealth"]), styles["small"]),
-                Paragraph(_percentage(row["failure_probability"]), styles["small"]),
-                Paragraph(_money(row["cumulative_tax"]), styles["small"]),
-                Paragraph("-" if pd.isna(row["break_even_year"]) else f"FY{int(row['break_even_year'])}", styles["small"]),
+                Paragraph(_pdf_text(row["scenario"], is_chinese), styles["small"]),
+                Paragraph(_pdf_text(_money(row["retirement_wealth"]), is_chinese), styles["small"]),
+                Paragraph(_pdf_text(_money(row["final_wealth"]), is_chinese), styles["small"]),
+                Paragraph(_pdf_text(_percentage(row["failure_probability"]), is_chinese), styles["small"]),
+                Paragraph(_pdf_text(_money(row["cumulative_tax"]), is_chinese), styles["small"]),
+                Paragraph(_pdf_text("-" if pd.isna(row["break_even_year"]) else f"FY{int(row['break_even_year'])}", is_chinese), styles["small"]),
             ])
         strategy_table = Table(strategy_rows, colWidths=[29 * mm, 31 * mm, 31 * mm, 23 * mm, 31 * mm, 27 * mm], repeatRows=1)
         strategy_table.setStyle(TableStyle([
@@ -729,14 +779,12 @@ def build_pdf_report_bytes(
         ]))
         story.append(strategy_table)
         best_row = strategy_df.sort_values(["failure_probability", "final_wealth"], ascending=[True, False]).iloc[0]
-        story.append(Paragraph(
-            _text(
-                is_chinese,
-                f"On the modelled outcomes, {escape(str(best_row['scenario']))} has the lowest failure probability, with final wealth of {_money(best_row['final_wealth'])}. This is a comparison result, not a recommendation.",
-                f"根据模型结果，{escape(str(best_row['scenario']))} 的失败概率最低，最终财富为 {_money(best_row['final_wealth'])}。这属于比较结果，并非建议。",
-            ),
-            styles["small"],
-        ))
+        best_summary = _text(
+            is_chinese,
+            f"On the modelled outcomes, {best_row['scenario']} has the lowest failure probability, with final wealth of {_money(best_row['final_wealth'])}. This is a comparison result, not a recommendation.",
+            f"根据模型结果，{best_row['scenario']} 的失败概率最低，最终财富为 {_money(best_row['final_wealth'])}。这属于比较结果，并非建议。",
+        )
+        story.append(Paragraph(_pdf_text(best_summary, is_chinese), styles["small"]))
 
     debt_strategy_df = build_debt_strategy_comparison_df(comparison_results, is_chinese=is_chinese)
     if not debt_strategy_df.empty and (
@@ -758,13 +806,13 @@ def build_pdf_report_bytes(
         ]]
         for _, row in debt_strategy_df.iterrows():
             debt_rows.append([
-                Paragraph(escape(str(row["scenario"])), styles["small"]),
-                Paragraph(_money(row["cumulative_interest"]), styles["small"]),
-                Paragraph(_money(row["ending_home_loan"]), styles["small"]),
-                Paragraph(_money(row["ending_property_loan"]), styles["small"]),
-                Paragraph(_money(row["ending_non_deductible_debt"]), styles["small"]),
-                Paragraph(_money(row["ending_deductible_debt"]), styles["small"]),
-                Paragraph(_money(row["final_wealth"]), styles["small"]),
+                Paragraph(_pdf_text(row["scenario"], is_chinese), styles["small"]),
+                Paragraph(_pdf_text(_money(row["cumulative_interest"]), is_chinese), styles["small"]),
+                Paragraph(_pdf_text(_money(row["ending_home_loan"]), is_chinese), styles["small"]),
+                Paragraph(_pdf_text(_money(row["ending_property_loan"]), is_chinese), styles["small"]),
+                Paragraph(_pdf_text(_money(row["ending_non_deductible_debt"]), is_chinese), styles["small"]),
+                Paragraph(_pdf_text(_money(row["ending_deductible_debt"]), is_chinese), styles["small"]),
+                Paragraph(_pdf_text(_money(row["final_wealth"]), is_chinese), styles["small"]),
             ])
         debt_table = Table(debt_rows, colWidths=[25 * mm, 23 * mm, 24 * mm, 25 * mm, 25 * mm, 25 * mm, 25 * mm], repeatRows=1)
         debt_table.setStyle(TableStyle([
@@ -777,11 +825,12 @@ def build_pdf_report_bytes(
             ("RIGHTPADDING", (0, 0), (-1, -1), 3),
         ]))
         story.append(debt_table)
-        story.append(Paragraph(_text(
+        debt_note = _text(
             is_chinese,
             "The home loan and residential-investment-property loan are modelled separately from other investment debt. Interest deductibility must be confirmed from the use of borrowed funds and actual loan records.",
             "自住房贷款及住宅投资物业贷款与其他投资债务分别建模。利息能否抵扣必须根据借款资金用途及实际贷款记录确认。",
-        ), styles["small"]))
+        )
+        story.append(Paragraph(_pdf_text(debt_note, is_chinese), styles["small"]))
 
     story.append(CondPageBreak(75 * mm))
     story.append(Paragraph(_text(is_chinese, "Future outlook", "未来情况概述"), styles["h1"]))
@@ -804,7 +853,7 @@ def build_pdf_report_bytes(
         f"From FY{start_year} to FY{end_year}, deterministic total wealth {wealth_direction} from {_money(start_wealth)} to {_money(end_wealth)}. The Monte Carlo success rate is {_percentage(success_rate)}, with final wealth centred around {_money(median_final)} and a P10-P90 range of {_money(p10_final)} to {_money(p90_final)}. {shortfall_sentence}",
         f"从 FY{start_year} 至 FY{end_year}，确定性总财富预计由 {_money(start_wealth)}{wealth_direction}至 {_money(end_wealth)}。蒙特卡洛成功率为 {_percentage(success_rate)}，期末财富中位数约为 {_money(median_final)}，P10-P90 区间为 {_money(p10_final)} 至 {_money(p90_final)}。{shortfall_sentence}",
     )
-    story.append(Paragraph(outlook, styles["body"]))
+    story.append(Paragraph(_pdf_text(outlook, is_chinese), styles["body"]))
 
     story.append(Paragraph(_text(is_chinese, "Key milestones", "关键节点"), styles["h1"]))
     milestones = build_key_milestones(det_df, inputs, is_chinese=is_chinese)
@@ -816,10 +865,10 @@ def build_pdf_report_bytes(
     ]]
     for item in milestones:
         milestone_rows.append([
-            Paragraph(escape(str(item["event"])), styles["small"]),
-            Paragraph(str(item["year"]), styles["small"]),
-            Paragraph(_money(item["wealth"]), styles["small"]),
-            Paragraph(escape(str(item["note"])), styles["small"]),
+            Paragraph(_pdf_text(item["event"], is_chinese), styles["small"]),
+            Paragraph(_pdf_text(item["year"], is_chinese), styles["small"]),
+            Paragraph(_pdf_text(_money(item["wealth"]), is_chinese), styles["small"]),
+            Paragraph(_pdf_text(item["note"], is_chinese), styles["small"]),
         ])
     milestone_table = Table(milestone_rows, colWidths=[43 * mm, 18 * mm, 30 * mm, 81 * mm], repeatRows=1)
     milestone_table.setStyle(TableStyle([
@@ -839,7 +888,7 @@ def build_pdf_report_bytes(
     if combined_warnings:
         story.append(Paragraph(_text(is_chinese, "Items requiring review", "需要审阅的事项"), styles["h1"]))
         for warning in combined_warnings[:8]:
-            story.append(Paragraph(f"- {escape(_localise_warning(warning, is_chinese))}", styles["body"]))
+            story.append(Paragraph(f"- {_pdf_text(_localise_warning(warning, is_chinese), is_chinese)}", styles["body"]))
 
     if report_detail in {"Advice Support Report", "Technical Appendix"}:
         story.append(PageBreak())
@@ -848,7 +897,7 @@ def build_pdf_report_bytes(
             story.append(Paragraph(_text(is_chinese, "Key risks and downside observations", "关键风险及不利情景"), styles["h1"]))
             for _, row in strategy_df.iterrows():
                 story.append(Paragraph(
-                    f"<b>{escape(str(row['scenario']))}:</b> {escape(str(row['key_risks']))}",
+                    f"<b>{_pdf_text(row['scenario'], is_chinese)}:</b> {_pdf_text(row['key_risks'], is_chinese)}",
                     styles["body"],
                 ))
 
@@ -864,11 +913,11 @@ def build_pdf_report_bytes(
                 ]]
                 for _, row in assumption_df.iterrows():
                     assumption_rows.append([
-                        Paragraph(escape(str(row["scenario"])), styles["small"]),
-                        Paragraph(escape(str(row["withdrawal_order"])), styles["small"]),
-                        Paragraph(_money(row["cash_reserve_floor"]), styles["small"]),
-                        Paragraph(_money(row["non_super_estate_reserve"]), styles["small"]),
-                        Paragraph(_money(row["property_estate_reserve"]), styles["small"]),
+                        Paragraph(_pdf_text(row["scenario"], is_chinese), styles["small"]),
+                        Paragraph(_pdf_text(row["withdrawal_order"], is_chinese), styles["small"]),
+                        Paragraph(_pdf_text(_money(row["cash_reserve_floor"]), is_chinese), styles["small"]),
+                        Paragraph(_pdf_text(_money(row["non_super_estate_reserve"]), is_chinese), styles["small"]),
+                        Paragraph(_pdf_text(_money(row["property_estate_reserve"]), is_chinese), styles["small"]),
                     ])
                 assumption_table = Table(assumption_rows, colWidths=[25 * mm, 69 * mm, 24 * mm, 27 * mm, 27 * mm], repeatRows=1)
                 assumption_table.setStyle(TableStyle([
@@ -885,7 +934,7 @@ def build_pdf_report_bytes(
         story.append(Paragraph(_text(is_chinese, "Adviser notes", "顾问备注"), styles["h1"]))
         notes_text = str(adviser_notes or "").strip()
         story.append(Paragraph(
-            escape(notes_text) if notes_text else _text(is_chinese, "No adviser notes were entered.", "未填写顾问备注。"),
+            _pdf_text(notes_text, is_chinese) if notes_text else _text(is_chinese, "No adviser notes were entered.", "未填写顾问备注。"),
             styles["body"],
         ))
 
@@ -911,7 +960,7 @@ def build_pdf_report_bytes(
         if inputs.get("module_investment_debt_enabled", False):
             policy_rows.append((_text(is_chinese, "Debt deductibility", "债务利息抵扣资格"), _text(is_chinese, "User-confirmed loan-purpose assumption", "由用户确认借款资金用途")))
         policy_table = Table(
-            [[Paragraph(f"<b>{escape(label)}</b>", styles["small"]), Paragraph(escape(status), styles["small"])] for label, status in policy_rows],
+            [[Paragraph(f"<b>{_pdf_text(label, is_chinese)}</b>", styles["small"]), Paragraph(_pdf_text(status, is_chinese), styles["small"])] for label, status in policy_rows],
             colWidths=[86 * mm, 86 * mm],
         )
         policy_table.setStyle(TableStyle([

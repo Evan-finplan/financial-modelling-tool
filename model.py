@@ -1017,6 +1017,35 @@ def validate_inputs(inputs):
     if inputs["number_of_simulations"] <= 0:
         errors.append("number_of_simulations must be greater than 0.")
 
+    active_people = ["person1"]
+    if inputs.get("household_mode") != "One Person":
+        active_people.append("person2")
+    for person in active_people:
+        current_age = int(inputs[f"{person}_current_age"])
+        retirement_age = int(inputs[f"{person}_retirement_age"])
+        if not 18 <= current_age <= 100:
+            errors.append(f"{person}_current_age must be between 18 and 100.")
+        if not 18 <= retirement_age <= 100:
+            errors.append(f"{person}_retirement_age must be between 18 and 100.")
+        if inputs.get("module_pension_enabled", True):
+            pension_start_age = int(inputs[f"{person}_pension_start_age"])
+            if not 18 <= pension_start_age <= 100:
+                errors.append(f"{person}_pension_start_age must be between 18 and 100.")
+
+        active_super_accounts = []
+        if inputs.get("module_super_enabled", True):
+            active_super_accounts.append("accum")
+        if inputs.get("module_pension_enabled", True):
+            active_super_accounts.append("pension")
+        for account in active_super_accounts:
+            balance = float(inputs[f"{person}_{account}_super_balance"])
+            cost_base = float(inputs[f"{person}_{account}_super_cost_base"])
+            if cost_base > balance + 1e-9:
+                errors.append(
+                    f"{person}_{account}_super_cost_base cannot exceed "
+                    f"{person}_{account}_super_balance under the current pooled cost-base setup."
+                )
+
 
     if inputs["super_income_return_mean"] <= -1:
         errors.append("Super Income Return Mean must be greater than -1.00.")
@@ -2945,19 +2974,43 @@ def run_one_year(
         person1_division_293["division_293_tax"]
         + person2_division_293["division_293_tax"]
     )
+    person1_non_super_tax_paid = non_super_tax_paid * inputs["non_super_ownership_person1"]
+    person2_non_super_tax_paid = non_super_tax_paid * (1.0 - inputs["non_super_ownership_person1"])
+    person1_base_personal_tax = tax_split["person1_salary_tax_total"] + person1_non_super_tax_paid
+    person2_base_personal_tax = tax_split["person2_salary_tax_total"] + person2_non_super_tax_paid
+    person1_effective_budget_tax_adjustment = max(
+        person1_budget_tax["personal_tax_adjustment"],
+        -person1_base_personal_tax,
+    )
+    person2_effective_budget_tax_adjustment = max(
+        person2_budget_tax["personal_tax_adjustment"],
+        -person2_base_personal_tax,
+    )
     total_budget_personal_tax_adjustment = (
-        person1_budget_tax["personal_tax_adjustment"]
-        + person2_budget_tax["personal_tax_adjustment"]
+        person1_effective_budget_tax_adjustment
+        + person2_effective_budget_tax_adjustment
     )
     total_cgt_minimum_tax = (
         person1_cgt_minimum_tax["cgt_minimum_tax_gap"]
         + person2_cgt_minimum_tax["cgt_minimum_tax_gap"]
     )
+    person1_personal_tax_total = max(
+        person1_base_personal_tax
+        + person1_effective_budget_tax_adjustment
+        + person1_cgt_minimum_tax["cgt_minimum_tax_gap"],
+        0.0,
+    )
+    person2_personal_tax_total = max(
+        person2_base_personal_tax
+        + person2_effective_budget_tax_adjustment
+        + person2_cgt_minimum_tax["cgt_minimum_tax_gap"],
+        0.0,
+    )
     total_personal_tax = (
-        salary_tax_total + non_super_tax_paid + total_division_293_tax
-        + total_budget_personal_tax_adjustment
+        person1_personal_tax_total
+        + person2_personal_tax_total
+        + total_division_293_tax
         + trust_result["trustee_minimum_tax"]
-        + total_cgt_minimum_tax
     )
     total_super_contributions_tax = (
         person1_super_contributions_tax + person2_super_contributions_tax
@@ -3038,7 +3091,7 @@ def run_one_year(
         "person1_division_293_super_contributions": person1_division_293["division_293_super_contributions"],
         "person1_division_293_taxable_contributions": person1_division_293["division_293_taxable_contributions"],
         "person1_division_293_tax": person1_division_293["division_293_tax"],
-        "person1_personal_tax_total": tax_split["person1_salary_tax_total"] + (non_super_tax_paid * inputs["non_super_ownership_person1"]) + person1_budget_tax["personal_tax_adjustment"] + person1_cgt_minimum_tax["cgt_minimum_tax_gap"],
+        "person1_personal_tax_total": person1_personal_tax_total,
         "person1_net_income": person1_net_income,
         "person2_income_tax": tax_split["person2_income_tax"],
         "person2_medicare_levy": tax_split["person2_medicare_levy"],
@@ -3050,7 +3103,7 @@ def run_one_year(
         "person2_division_293_super_contributions": person2_division_293["division_293_super_contributions"],
         "person2_division_293_taxable_contributions": person2_division_293["division_293_taxable_contributions"],
         "person2_division_293_tax": person2_division_293["division_293_tax"],
-        "person2_personal_tax_total": tax_split["person2_salary_tax_total"] + (non_super_tax_paid * (1.0 - inputs["non_super_ownership_person1"])) + person2_budget_tax["personal_tax_adjustment"] + person2_cgt_minimum_tax["cgt_minimum_tax_gap"],
+        "person2_personal_tax_total": person2_personal_tax_total,
         "person2_net_income": person2_net_income,
         "household_net_income": person1_net_income + person2_net_income,
         "taxable_non_super_earnings_total": taxable_non_super_guess,

@@ -250,6 +250,11 @@ def render_pdf_export_controls(
     report_detail = st.selectbox(
         t("Report Detail", "报告详细程度"),
         options=["Client Summary", "Advice Support Report", "Technical Appendix"],
+        format_func=lambda option: {
+            "Client Summary": t("Client Summary", "客户摘要"),
+            "Advice Support Report": t("Advice Support Report", "建议支持报告"),
+            "Technical Appendix": t("Technical Appendix", "技术附录"),
+        }[option],
         key=f"pdf_detail_{sanitise_filename_part(widget_scope, fallback='pdf')}",
         help=t(
             "Client Summary is concise. Advice Support adds strategy analysis and adviser notes. Technical Appendix also includes assumptions, policy status and calculation methodology.",
@@ -1367,7 +1372,7 @@ def render_warning_sections(input_warnings_by_scenario, output_warnings_by_scena
     )
 
     with st.expander(expander_label, expanded=False):
-        if view_mode == t("Adviser View", "顾问视图"):
+        if view_mode == "Adviser View":
             for scenario_name, warnings_list in input_warnings_by_scenario.items():
                 if warnings_list:
                     st.subheader(t(f"Input Warnings - {scenario_name}", f"输入警告 - {scenario_name}"))
@@ -1849,6 +1854,8 @@ defaults = {
     "saved_result_sets": {},
     "active_result_set_name": "Current Results",
     "workspace_mode": "Edit Inputs",
+    "view_mode": "Adviser View",
+    "scenario_mode": "Single Scenario",
     "show_assumption_panel": False,
     "show_live_input_checks": False,
     "simulation_depth": "Standard",
@@ -2151,13 +2158,11 @@ contribution_events_df = normalise_contribution_events(
 with st.sidebar:
     st.markdown(f"### {t('Controls', '控制面板')}")
 
-    selected_language = st.radio(
+    st.radio(
         t("Language", "语言"),
         options=[LANGUAGE_EN, LANGUAGE_CN],
-        index=0 if st.session_state.ui_language == LANGUAGE_EN else 1,
-        key="ui_language_selector",
+        key="ui_language",
     )
-    st.session_state.ui_language = selected_language
 
     if st.button(
         t("Clear This Session", "清空本次会话"),
@@ -2178,10 +2183,23 @@ with st.sidebar:
             "输入内容及上传工作簿仅用于本次浏览器会话。本应用不设客户数据库；清空、刷新或断开会话后，不会有意保留你的数据。请勿输入计算并不需要的身份识别信息。",
         ))
 
-    view_mode = st.radio(
+    view_mode_options = ["Adviser View", "Client View"]
+    view_mode_labels = {
+        "Adviser View": t("Adviser View", "顾问视图"),
+        "Client View": t("Client View", "客户视图"),
+    }
+    stored_view_mode = st.session_state.get("view_mode", "Adviser View")
+    if stored_view_mode not in view_mode_options:
+        stored_view_mode = "Adviser View"
+    view_mode_label = st.radio(
         t("View Mode", "视图模式"),
-        options=[t("Adviser View", "顾问视图"), t("Client View", "客户视图")],
+        options=[view_mode_labels[option] for option in view_mode_options],
+        index=view_mode_options.index(stored_view_mode),
     )
+    view_mode = view_mode_options[
+        [view_mode_labels[option] for option in view_mode_options].index(view_mode_label)
+    ]
+    st.session_state.view_mode = view_mode
 
     with st.expander(t("Client Modules", "客户模块"), expanded=False):
         st.caption(t(
@@ -2241,23 +2259,31 @@ with st.sidebar:
         t("Value Display", "数值显示"),
         options=["Future Value", "Present Value"],
         index=0 if st.session_state.value_mode == "Future Value" else 1,
+        format_func=lambda option: {
+            "Future Value": t("Future Value", "终值"),
+            "Present Value": t("Present Value", "现值"),
+        }[option],
         help=t(
             "Present Value discounts displayed monetary outputs back to the starting financial year using the inflation assumption.",
             "现值会按 inflation 假设把显示金额折算回起始财政年度。",
         ),
     )
 
-    workspace_options = [t("Edit Inputs", "编辑输入"), t("View Results", "查看结果")]
+    workspace_options = ["Edit Inputs", "View Results"]
     workspace_mode_label = st.radio(
         t("Workspace", "工作区"),
         options=workspace_options,
         index=0 if st.session_state.workspace_mode == "Edit Inputs" else 1,
+        format_func=lambda option: {
+            "Edit Inputs": t("Edit Inputs", "编辑输入"),
+            "View Results": t("View Results", "查看结果"),
+        }[option],
         help=t(
             "Use Edit Inputs for faster input changes. Switch to View Results when you want to review charts and tables.",
             "编辑输入时不会反复渲染大型图表和表格，速度更快。需要查看结果时切换到查看结果。",
         ),
     )
-    workspace_mode = "Edit Inputs" if workspace_mode_label == workspace_options[0] else "View Results"
+    workspace_mode = workspace_mode_label
 
     show_live_input_checks = st.checkbox(
         t("Live input checks", "即时输入检查"),
@@ -2278,27 +2304,46 @@ with st.sidebar:
     )
 
     scenario_mode_options = [
-        t("Single Scenario", "单一情景"),
-        t("Compare Standard Presets", "比较标准预设"),
+        "Single Scenario",
+        "Compare Standard Presets",
     ]
     if module_super_enabled or module_non_super_enabled or module_property_enabled:
-        scenario_mode_options.append(t("Compare Asset Drawdown Strategies", "比较资产提取策略"))
+        scenario_mode_options.append("Compare Asset Drawdown Strategies")
     if module_cash_surplus_enabled and (
         module_investment_debt_enabled
         or module_property_enabled
         or float(st.session_state.get("main_residence_loan_balance", 0.0)) > 0
     ):
-        scenario_mode_options.append(t("Compare Debt Repayment Strategies", "比较债务偿还策略"))
-    scenario_mode = st.radio(
+        scenario_mode_options.append("Compare Debt Repayment Strategies")
+    stored_scenario_mode = st.session_state.get("scenario_mode", "Single Scenario")
+    if stored_scenario_mode not in scenario_mode_options:
+        stored_scenario_mode = "Single Scenario"
+    scenario_mode_labels = {
+        "Single Scenario": t("Single Scenario", "单一情景"),
+        "Compare Standard Presets": t("Compare Standard Presets", "比较标准预设"),
+        "Compare Asset Drawdown Strategies": t("Compare Asset Drawdown Strategies", "比较资产提取策略"),
+        "Compare Debt Repayment Strategies": t("Compare Debt Repayment Strategies", "比较债务偿还策略"),
+    }
+    scenario_mode_label = st.radio(
         t("Scenario Mode", "情景模式"),
-        options=scenario_mode_options,
+        options=[scenario_mode_labels[option] for option in scenario_mode_options],
+        index=scenario_mode_options.index(stored_scenario_mode),
     )
+    scenario_mode = scenario_mode_options[
+        [scenario_mode_labels[option] for option in scenario_mode_options].index(scenario_mode_label)
+    ]
+    st.session_state.scenario_mode = scenario_mode
 
     simulation_depth_options = ["Fast", "Standard", "Deep"]
     simulation_depth = st.radio(
         t("Simulation Depth", "模拟深度"),
         options=simulation_depth_options,
         index=simulation_depth_options.index(st.session_state.get("simulation_depth", "Standard")),
+        format_func=lambda option: {
+            "Fast": t("Fast", "快速"),
+            "Standard": t("Standard", "标准"),
+            "Deep": t("Deep", "深度"),
+        }[option],
         help=t(
             "Fast is best while editing. Standard is suitable for review. Deep is slower and intended for final stress testing.",
             "编辑时建议用 Fast。Standard 适合复核。Deep 更慢，适合最终压力测试。",
@@ -2313,8 +2358,14 @@ with st.sidebar:
     preset_choice = st.selectbox(
         t("Assumption Preset", "假设预设"),
         options=["Conservative", "Base Case", "Optimistic", "Custom"],
+        format_func=lambda option: {
+            "Conservative": t("Conservative", "保守情景"),
+            "Base Case": t("Base Case", "基础情景"),
+            "Optimistic": t("Optimistic", "乐观情景"),
+            "Custom": t("Custom", "自定义"),
+        }[option],
         key="assumption_preset",
-        disabled=(scenario_mode != t("Single Scenario", "单一情景")),
+        disabled=(scenario_mode != "Single Scenario"),
     )
 
     if is_one_person_mode:
@@ -2382,6 +2433,7 @@ with st.sidebar:
         t("Displayed Result Set", "当前显示结果集"),
         options=available_result_views,
         index=available_result_views.index(current_active_result_name),
+        format_func=lambda option: t("Current Results", "最新结果") if option == "Current Results" else option,
         key="active_result_set_name_selector",
         help=t(
             "Switch between the latest run and any saved snapshots in this session.",
@@ -2716,7 +2768,9 @@ with st.form("input_editor_form", clear_on_submit=False):
         with p1a:
             person1_current_age = st.number_input(
                 t("Person 1 Current Age", "人物 1 当前年龄"),
-                value=int(st.session_state.person1_current_age),
+                min_value=18,
+                max_value=100,
+                value=min(max(int(st.session_state.person1_current_age), 18), 100),
                 step=1,
                 help=t("Current age at the start of the projection.", "预测开始时的当前年龄。"),
             )
@@ -2737,8 +2791,14 @@ with st.form("input_editor_form", clear_on_submit=False):
         with p1b:
             person1_retirement_age = st.number_input(
                 t("Person 1 Retirement Age", "人物 1 退休年龄"),
-                value=int(st.session_state.person1_retirement_age),
+                min_value=18,
+                max_value=100,
+                value=min(max(int(st.session_state.person1_retirement_age), 18), 100),
                 step=1,
+                help=t(
+                    "Enter an age below current age for a client who is already retired at the projection start.",
+                    "如客户在预测开始时已经退休，可输入低于当前年龄的退休年龄。",
+                ),
             )
             if module_super_enabled:
                 person1_accum_super_cost_base = currency_text_input(
@@ -2758,7 +2818,9 @@ with st.form("input_editor_form", clear_on_submit=False):
             if module_pension_enabled:
                 person1_pension_start_age = st.number_input(
                 t("Person 1 Pension Start Age", "人物 1 养老金开始年龄"),
-                value=int(st.session_state.person1_pension_start_age),
+                min_value=18,
+                max_value=100,
+                value=min(max(int(st.session_state.person1_pension_start_age), 18), 100),
                 step=1,
             )
                 person1_transfer_balance_cap = currency_text_input(
@@ -2780,7 +2842,9 @@ with st.form("input_editor_form", clear_on_submit=False):
         with p2a:
             person2_current_age = st.number_input(
                 t("Person 2 Current Age", "人物 2 当前年龄"),
-                value=int(st.session_state.person2_current_age),
+                min_value=18,
+                max_value=100,
+                value=min(max(int(st.session_state.person2_current_age), 18), 100),
                 step=1,
                 help=t("Current age at the start of the projection.", "预测开始时的当前年龄。"),
             )
@@ -2801,9 +2865,14 @@ with st.form("input_editor_form", clear_on_submit=False):
         with p2b:
             person2_retirement_age = st.number_input(
                 t("Person 2 Retirement Age", "人物 2 退休年龄"),
-                value=int(st.session_state.person2_retirement_age),
+                min_value=18,
+                max_value=100,
+                value=min(max(int(st.session_state.person2_retirement_age), 18), 100),
                 step=1,
-                help=t("Employment income stops once current age reaches retirement age.", "达到退休年龄后，employment income 停止。"),
+                help=t(
+                    "Employment income stops once current age reaches retirement age. Enter an age below current age if already retired.",
+                    "达到退休年龄后，工作收入停止。如客户已经退休，可输入低于当前年龄的退休年龄。",
+                ),
             )
             if module_super_enabled:
                 person2_accum_super_cost_base = currency_text_input(
@@ -2823,7 +2892,9 @@ with st.form("input_editor_form", clear_on_submit=False):
             if module_pension_enabled:
                 person2_pension_start_age = st.number_input(
                 t("Person 2 Pension Start Age", "人物 2 养老金开始年龄"),
-                value=int(st.session_state.person2_pension_start_age),
+                min_value=18,
+                max_value=100,
+                value=min(max(int(st.session_state.person2_pension_start_age), 18), 100),
                 step=1,
                 help=t("Age when accumulation super can start transferring into pension phase in the model.", "模型中 accumulation super 开始转入 pension 的年龄。"),
             )
@@ -3871,18 +3942,18 @@ else:
 # ============================================================
 
 if run_button:
-    if scenario_mode == t("Single Scenario", "单一情景"):
+    if scenario_mode == "Single Scenario":
         if preset_choice == "Custom":
             scenario_inputs_map = {"Custom": base_inputs.copy()}
         else:
             scenario_inputs_map = {preset_choice: apply_preset_to_inputs(base_inputs, preset_choice, runtime_presets)}
-    elif scenario_mode == t("Compare Standard Presets", "比较标准预设"):
+    elif scenario_mode == "Compare Standard Presets":
         scenario_inputs_map = {
             "Conservative": apply_preset_to_inputs(base_inputs, "Conservative", runtime_presets),
             "Base Case": apply_preset_to_inputs(base_inputs, "Base Case", runtime_presets),
             "Optimistic": apply_preset_to_inputs(base_inputs, "Optimistic", runtime_presets),
         }
-    elif scenario_mode == t("Compare Asset Drawdown Strategies", "比较资产提取策略"):
+    elif scenario_mode == "Compare Asset Drawdown Strategies":
         strategy_base = (
             apply_preset_to_inputs(base_inputs, preset_choice, runtime_presets)
             if preset_choice in runtime_presets else base_inputs.copy()
@@ -4029,7 +4100,7 @@ if active_result_bundle is not None and workspace_mode == "View Results":
     det_single_compare_df = display_det_df.copy()
     det_single_compare_df["scenario"] = selected_scenario
 
-    if view_mode == t("Adviser View", "顾问视图"):
+    if view_mode == "Adviser View":
         st.subheader(t(f"Adviser Summary - {selected_scenario}", f"顾问摘要 - {selected_scenario}"))
         st.info(t("Adviser Note: Outputs are indicative only and should be reviewed in the context of client objectives, risk profile, and current legislation before forming advice.", "顾问提示：本输出仅供指示参考，在形成建议前应结合客户目标、风险承受能力及现行法规进行审阅。"))
 
@@ -4042,14 +4113,14 @@ if active_result_bundle is not None and workspace_mode == "View Results":
         bottom_col3.metric(t("Spread (P90 - P10)", "区间差值（P90 - P10）"), f"${selected_p90_final_wealth - selected_p10_final_wealth:,.0f}")
 
         adviser_sections = [
-            t("Overview", "总览"),
-            t("Strategy Comparison", "策略对比"),
-            t("Wealth Charts", "财富图表"),
-            t("Monte Carlo", "蒙特卡洛"),
-            t("Tax", "税务"),
-            t("Cashflow", "现金流"),
-            t("Debug Tables", "调试表"),
-            t("Export", "导出"),
+            "Overview",
+            "Strategy Comparison",
+            "Wealth Charts",
+            "Monte Carlo",
+            "Tax",
+            "Cashflow",
+            "Debug Tables",
+            "Export",
         ]
         selected_module_inputs = selected_result["inputs"]
         if (
@@ -4057,16 +4128,34 @@ if active_result_bundle is not None and workspace_mode == "View Results":
             or float(selected_module_inputs.get("main_residence_loan_balance", 0.0)) > 0
             or float(selected_module_inputs.get("residential_property_loan_balance", 0.0)) > 0
         ):
-            adviser_sections.insert(2, t("Debt Strategies", "债务策略"))
-        adviser_result_section = st.radio(
+            adviser_sections.insert(2, "Debt Strategies")
+        adviser_section_labels = {
+            "Overview": t("Overview", "总览"),
+            "Strategy Comparison": t("Strategy Comparison", "策略对比"),
+            "Debt Strategies": t("Debt Strategies", "债务策略"),
+            "Wealth Charts": t("Wealth Charts", "财富图表"),
+            "Monte Carlo": t("Monte Carlo", "蒙特卡洛"),
+            "Tax": t("Tax", "税务"),
+            "Cashflow": t("Cashflow", "现金流"),
+            "Debug Tables": t("Debug Tables", "调试表"),
+            "Export": t("Export", "导出"),
+        }
+        stored_adviser_section = st.session_state.get("adviser_result_section", "Overview")
+        if stored_adviser_section not in adviser_sections:
+            stored_adviser_section = "Overview"
+        adviser_result_section_label = st.radio(
             t("Adviser Display Section", "顾问显示区"),
-            options=adviser_sections,
+            options=[adviser_section_labels[option] for option in adviser_sections],
+            index=adviser_sections.index(stored_adviser_section),
             horizontal=True,
-            key="adviser_result_section_selector",
             help=t("Only the selected section is rendered. This keeps result navigation fast.", "只渲染当前选择的区域，从而提升结果页切换速度。"),
         )
+        adviser_result_section = adviser_sections[
+            [adviser_section_labels[option] for option in adviser_sections].index(adviser_result_section_label)
+        ]
+        st.session_state.adviser_result_section = adviser_result_section
 
-        if adviser_result_section == t("Overview", "总览"):
+        if adviser_result_section == "Overview":
             render_saved_result_comparison_section(st.session_state.get("saved_result_sets", {}), value_mode)
             render_assumption_details(assumption_details_df)
             render_warning_sections(input_warnings_by_scenario, output_warnings_by_scenario, view_mode)
@@ -4085,7 +4174,7 @@ if active_result_bundle is not None and workspace_mode == "View Results":
             median_fig.update_layout(title=t("Median Final Wealth by Scenario", "各情景最终财富中位数"), xaxis_title=t("Scenario", "情景"), yaxis_title=t("Median Final Wealth", "最终财富中位数"))
             st.plotly_chart(median_fig, width="stretch", key="median_wealth_comparison")
 
-        elif adviser_result_section == t("Strategy Comparison", "策略对比"):
+        elif adviser_result_section == "Strategy Comparison":
             st.subheader(t("Strategy Comparison", "策略对比"))
             st.caption(t(
                 "Compares asset drawdown order, after-tax cashflow, retirement wealth, final wealth, failure probability, cumulative tax, advantage timing and key risks. Differences are modelled outcomes, not personal advice.",
@@ -4149,7 +4238,7 @@ if active_result_bundle is not None and workspace_mode == "View Results":
                     help=t("Included in Advice Support and Technical Appendix reports.", "将纳入 Advice Support 和 Technical Appendix 报告。"),
                 )
 
-        elif adviser_result_section == t("Debt Strategies", "债务策略"):
+        elif adviser_result_section == "Debt Strategies":
             st.subheader(t("Debt Repayment & Surplus Allocation Comparison", "债务偿还与盈余分配比较"))
             st.caption(t(
                 "Compares annual interest, tax, debt-free timing, ending debt, offset liquidity, final wealth and failure probability. A lower deductible-interest bill can also reduce tax deductions, so interest saved and tax paid should be considered together.",
@@ -4260,7 +4349,7 @@ if active_result_bundle is not None and workspace_mode == "View Results":
                     debt_path_fig.update_layout(xaxis_title=t("Financial Year", "财政年度"), yaxis_title=t("Net Debt", "净债务"))
                     st.plotly_chart(debt_path_fig, width="stretch", key="debt_strategy_paths")
 
-        elif adviser_result_section == t("Wealth Charts", "财富图表"):
+        elif adviser_result_section == "Wealth Charts":
             st.subheader(t("Wealth Charts", "财富图表"))
             det_all_fig = create_deterministic_wealth_chart_comparison(det_scenarios_df, common_inputs)
             det_all_fig.update_layout(title=t("Deterministic Total Wealth Projection", "确定性总财富预测"), xaxis_title=t("Financial Year", "财政年度"), yaxis_title=t("Total Wealth", "总财富"))
@@ -4270,7 +4359,7 @@ if active_result_bundle is not None and workspace_mode == "View Results":
             income_spending_fig.update_layout(xaxis_title=t("Financial Year", "财政年度"), yaxis_title=t("Annual Amount", "年度金额"))
             st.plotly_chart(income_spending_fig, width="stretch", key=chart_key("income_spending", selected_scenario, view_mode, "adviser_lazy"))
 
-        elif adviser_result_section == t("Monte Carlo", "蒙特卡洛"):
+        elif adviser_result_section == "Monte Carlo":
             st.subheader(t("Monte Carlo", "蒙特卡洛"))
             percentile_fig = create_percentile_paths_chart(display_percentile_df, selected_result["inputs"], t(f"Monte Carlo Percentile Paths - {selected_scenario}", f"蒙特卡洛百分位路径 - {selected_scenario}"))
             percentile_fig.update_layout(xaxis_title=t("Financial Year", "财政年度"), yaxis_title=t("Total Wealth", "总财富"))
@@ -4284,7 +4373,7 @@ if active_result_bundle is not None and workspace_mode == "View Results":
             histogram_fig.update_layout(xaxis_title=t("Final Wealth", "最终财富"), yaxis_title=t("Frequency", "次数"))
             st.plotly_chart(histogram_fig, width="stretch", key=chart_key("histogram", selected_scenario, view_mode, "adviser_lazy"))
 
-        elif adviser_result_section == t("Tax", "税务"):
+        elif adviser_result_section == "Tax":
             st.subheader(t("Tax", "税务"))
             tax_breakdown_fig = create_tax_breakdown_chart(display_det_df, selected_result["inputs"], t(f"Tax Breakdown - {selected_scenario}", f"税务明细 - {selected_scenario}"))
             tax_breakdown_fig.update_layout(xaxis_title=t("Financial Year", "财政年度"), yaxis_title=t("Annual Tax", "年度税款"))
@@ -4314,7 +4403,7 @@ if active_result_bundle is not None and workspace_mode == "View Results":
             st.subheader(t("Pension Tax-Free Validation Summary", "退休金免税验证摘要"))
             st.dataframe(pension_tax_free_summary_df, width="stretch")
 
-        elif adviser_result_section == t("Cashflow", "现金流"):
+        elif adviser_result_section == "Cashflow":
             st.subheader(t("Cashflow", "现金流"))
             if create_cashflow_chart is None:
                 st.info(t(
@@ -4345,7 +4434,7 @@ if active_result_bundle is not None and workspace_mode == "View Results":
             ))
             st.dataframe(adviser_cashflow_asset_movement_tax_df, width="stretch")
 
-        elif adviser_result_section == t("Debug Tables", "调试表"):
+        elif adviser_result_section == "Debug Tables":
             st.subheader(t("Debug Tables", "调试表"))
             missing_validation_cols = get_missing_validation_columns(display_det_df, selected_result["inputs"])
             if missing_validation_cols:
@@ -4369,7 +4458,7 @@ if active_result_bundle is not None and workspace_mode == "View Results":
                 st.dataframe(display_percentile_df, width="stretch")
                 st.dataframe(selected_result["failure_prob_df"], width="stretch")
 
-        elif adviser_result_section == t("Export", "导出"):
+        elif adviser_result_section == "Export":
             st.subheader(t("Export", "导出"))
             render_pdf_export_controls(
                 selected_result=pdf_selected_result,
